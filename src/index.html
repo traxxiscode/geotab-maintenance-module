@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fleet Maintenance Module</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ── Triggered Reminder Notification Banner ── -->
+  <div id="notifBanner" class="notif-banner" style="display:none">
+    <div class="notif-banner-icon">🔔</div>
+    <div class="notif-banner-content">
+      <div class="notif-banner-title" id="notifTitle">Maintenance Reminder Triggered</div>
+      <div class="notif-banner-desc" id="notifDesc"></div>
+    </div>
+    <div class="notif-banner-actions">
+      <button class="btn btn-ghost btn-sm" onclick="app.dismissNotif()">Dismiss</button>
+      <button class="btn btn-primary btn-sm" onclick="app.openAcceptModal()">✓ Accept &amp; Create Work Order</button>
+    </div>
+  </div>
+
+  <!-- ── Header ── -->
+  <div class="header">
+    <div class="header-brand">
+      <div class="brand-icon">🔧</div>
+      <div>
+        <div class="brand-text">FLEET MAINTENANCE</div>
+        <div class="brand-sub">Geotab Add-in Module</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="sync-status">
+        <div class="sync-dot"></div>
+        <span id="syncLabel">Connecting...</span>
+      </div>
+      <!-- Theme Toggle -->
+      <div class="theme-toggle" title="Toggle light/dark mode">
+        <span class="theme-icon" id="themeIcon">🌙</span>
+        <label class="toggle-switch">
+          <input type="checkbox" id="themeToggle" onchange="app.toggleTheme(this.checked)">
+          <span class="toggle-track"></span>
+        </label>
+        <span class="theme-toggle-label" id="themeLabel">DARK</span>
+      </div>
+      <div class="notification-bell" id="notifBell" title="Pending notifications">
+        <span>🔔</span>
+        <div class="notif-badge" id="notifDot" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Tabs ── -->
+  <div class="tab-bar">
+    <div class="tab active" id="tab-reminders" onclick="app.switchTab('reminders')">
+      <span>⏰</span> Maintenance Reminders
+      <span class="tab-count" id="reminderCount">0</span>
+    </div>
+    <div class="tab" id="tab-workorders" onclick="app.switchTab('workorders')">
+      <span>📋</span> Work Orders
+      <span class="tab-count" id="woCount">0</span>
+    </div>
+  </div>
+
+  <!-- ── Main Content ── -->
+  <div class="main" id="mainContent">
+
+    <!-- Reminders Panel -->
+    <div class="panel active" id="panel-reminders">
+      <div class="stats-row">
+        <div class="stat-card danger">
+          <div class="stat-label">Overdue</div>
+          <div class="stat-value" id="stat-overdue">0</div>
+          <div class="stat-sub">Requires immediate action</div>
+        </div>
+        <div class="stat-card warn">
+          <div class="stat-label">Due Soon</div>
+          <div class="stat-value" id="stat-due-soon">0</div>
+          <div class="stat-sub">Within threshold range</div>
+        </div>
+        <div class="stat-card ok">
+          <div class="stat-label">On Schedule</div>
+          <div class="stat-value" id="stat-scheduled">0</div>
+          <div class="stat-sub">Active reminders OK</div>
+        </div>
+        <div class="stat-card info">
+          <div class="stat-label">Vehicles Tracked</div>
+          <div class="stat-value" id="stat-vehicles">0</div>
+          <div class="stat-sub">Connected to Geotab</div>
+        </div>
+      </div>
+
+      <div class="panel-header">
+        <div class="panel-title">Reminders <span>/ All Vehicles</span></div>
+        <button class="btn btn-primary" onclick="app.openReminderModal()">＋ New Reminder</button>
+      </div>
+
+      <div class="table-wrap">
+        <div class="table-toolbar">
+          <div class="search-wrap">
+            <input class="search-input" placeholder="Search vehicle, task..." oninput="app.filterReminders(this.value)">
+          </div>
+          <select class="filter-select" onchange="app.filterRemindersByStatus(this.value)">
+            <option value="">All Status</option>
+            <option value="overdue">Overdue</option>
+            <option value="due-soon">Due Soon</option>
+            <option value="scheduled">Scheduled</option>
+          </select>
+          <select class="filter-select" id="vehicleFilter" onchange="app.filterRemindersByVehicle(this.value)">
+            <option value="">All Vehicles</option>
+          </select>
+          <div style="margin-left:auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted);">
+            Showing <span id="rowCount">0</span> reminders
+          </div>
+        </div>
+        <table id="remindersTable">
+          <thead>
+            <tr>
+              <th>Vehicle</th>
+              <th>Task</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Trigger / Progress</th>
+              <th>Priority</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="remindersBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Work Orders Panel -->
+    <div class="panel" id="panel-workorders">
+      <div class="stats-row">
+        <div class="stat-card info">
+          <div class="stat-label">Open Orders</div>
+          <div class="stat-value" id="stat-wo-open">0</div>
+          <div class="stat-sub">Awaiting completion</div>
+        </div>
+        <div class="stat-card warn">
+          <div class="stat-label">In Progress</div>
+          <div class="stat-value" id="stat-wo-inprogress">0</div>
+          <div class="stat-sub">Currently being worked</div>
+        </div>
+        <div class="stat-card ok">
+          <div class="stat-label">Completed (MTD)</div>
+          <div class="stat-value" id="stat-wo-completed">0</div>
+          <div class="stat-sub">This month</div>
+        </div>
+        <div class="stat-card ok">
+          <div class="stat-label">Total Spend (MTD)</div>
+          <div class="stat-value" id="stat-wo-spend" style="font-size:22px">$0</div>
+          <div class="stat-sub">Across all vehicles</div>
+        </div>
+      </div>
+
+      <div class="panel-header">
+        <div class="panel-title">Work Orders <span>/ All Open</span></div>
+        <button class="btn btn-primary" onclick="app.openWOModal(null)">＋ New Work Order</button>
+      </div>
+
+      <div class="table-wrap">
+        <div class="table-toolbar">
+          <div class="search-wrap">
+            <input class="search-input" placeholder="Search order, vehicle..." oninput="app.filterWorkOrders(this.value)">
+          </div>
+          <select class="filter-select" onchange="app.filterWOByStatus(this.value)">
+            <option value="">All Status</option>
+            <option value="Open">Open</option>
+            <option value="In Progress">In Progress</option>
+            <option value="Completed">Completed</option>
+          </select>
+          <div style="margin-left:auto; font-family: var(--mono); font-size: 11px; color: var(--text-muted);">
+            Showing <span id="woRowCount">0</span> orders
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Order ID</th>
+              <th>Vehicle</th>
+              <th>Task</th>
+              <th>Status</th>
+              <th>Assigned To</th>
+              <th>Odometer at Service</th>
+              <th>Cost</th>
+              <th>Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="woBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Reminder Modal ── -->
+  <div class="modal-overlay" id="reminderModal" style="display:none" onclick="app.closeModalOnOverlay(event,'reminderModal')">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title" id="reminderModalTitle">＋ New Maintenance Reminder</div>
+        <button class="modal-close" onclick="app.closeModal('reminderModal')">×</button>
+      </div>
+      <div class="modal-body" id="reminderModalBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="app.closeModal('reminderModal')">Cancel</button>
+        <button class="btn btn-primary" onclick="app.saveReminder()">Save Reminder</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Accept Reminder Modal ── -->
+  <div class="modal-overlay" id="acceptModal" style="display:none" onclick="app.closeModalOnOverlay(event,'acceptModal')">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">✓ Accept Reminder &amp; Create Work Order</div>
+        <button class="modal-close" onclick="app.closeModal('acceptModal')">×</button>
+      </div>
+      <div class="modal-body" id="acceptModalBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="app.closeModal('acceptModal')">Cancel</button>
+        <button class="btn btn-success" onclick="app.acceptAndCreateWO()">✓ Confirm &amp; Create Work Order</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Work Order Modal ── -->
+  <div class="modal-overlay" id="woModal" style="display:none" onclick="app.closeModalOnOverlay(event,'woModal')">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title" id="woModalTitle">Work Order</div>
+        <button class="modal-close" onclick="app.closeModal('woModal')">×</button>
+      </div>
+      <div class="modal-body" id="woModalBody"></div>
+      <div class="modal-footer" id="woModalFooter"></div>
+    </div>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="geotab.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

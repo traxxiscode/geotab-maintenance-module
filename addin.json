@@ -1,0 +1,19 @@
+{
+  "name": "Fleet Maintenance Module",
+  "supportEmail": "support@traxxisgps.com",
+  "version": "1.0.0",
+  "defaultLanguage": "en",
+  "items": [
+    {
+      "page": "customPage",
+      "title": "Fleet Maintenance",
+      "noView": false,
+      "menuName": {
+        "en": "Fleet Maintenance"
+      },
+      "icon": "https://bxadam.github.io/MaintenanceAdd-in/assets/icon.svg",
+      "url": "https://bxadam.github.io/MaintenanceAdd-in/src/index.html"
+    }
+  ],
+  "isSigned": false
+}
