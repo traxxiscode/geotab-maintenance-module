@@ -934,4 +934,6 @@ const app = (() => {
   };
 
 })();
-})();
+
+// Expose to global scope so inline onclick attributes can reach it
+window.app = app;
