@@ -1,9 +1,7 @@
 /**
  * geotab.js
- * Geotab MyGeotab API integration layer + add-in lifecycle entry point.
+ * Geotab MyGeotab API integration + add-in lifecycle.
  */
-
-// ── Geotab Add-in Namespace ──────────────────────────────────────────────────
 
 geotab.addin.fleetMaintenanceModule = function () {
   'use strict';
@@ -13,7 +11,6 @@ geotab.addin.fleetMaintenanceModule = function () {
   let _elAddin = null;
 
   return {
-
     initialize: function (freshApi, freshState, initializeCallback) {
       _api     = freshApi;
       _state   = freshState;
@@ -34,11 +31,10 @@ geotab.addin.fleetMaintenanceModule = function () {
       GeotabIntegration.destroy();
       if (_elAddin) _elAddin.style.display = 'none';
     },
-
   };
 };
 
-// ── GeotabIntegration Module ─────────────────────────────────────────────────
+// ── GeotabIntegration ─────────────────────────────────────────────────────────
 
 const GeotabIntegration = (() => {
 
@@ -50,13 +46,13 @@ const GeotabIntegration = (() => {
   let _pollTimer = null;
   let _vehicles  = [];
 
-  // ── Public ──────────────────────────────────────────────────────────────────
+  // ── Public ─────────────────────────────────────────────────────────────────
 
   const init = async (api) => {
     _api = api;
 
     if (!_api) {
-      console.warn('GeotabIntegration: No API — running in demo mode.');
+      console.warn('GeotabIntegration: No API — demo mode.');
       await DataStore.connect(null);
       _startDemoMode();
       return;
@@ -64,7 +60,6 @@ const GeotabIntegration = (() => {
 
     _api.getSession(async function (session) {
       const databaseName = session.database;
-
       const dbEl = document.getElementById('currentDatabase');
       if (dbEl) dbEl.textContent = databaseName;
 
@@ -72,8 +67,8 @@ const GeotabIntegration = (() => {
 
       try {
         await _loadVehicles();
-        await _pollOdometers();
-        _pollTimer = setInterval(_pollOdometers, POLL_INTERVAL_MS);
+        await _pollLiveData();
+        _pollTimer = setInterval(_pollLiveData, POLL_INTERVAL_MS);
         _setSyncStatus(true);
       } catch (err) {
         console.error('GeotabIntegration: init failed.', err);
@@ -88,7 +83,7 @@ const GeotabIntegration = (() => {
 
   const getVehicles = () => _vehicles;
 
-  // ── Load Vehicles ─────────────────────────────────────────────────────────
+  // ── Load Vehicles ──────────────────────────────────────────────────────────
 
   const _loadVehicles = async () => {
     const devices = await _api.call('Get', {
@@ -127,8 +122,7 @@ const GeotabIntegration = (() => {
     console.log(`GeotabIntegration: Loaded ${_vehicles.length} vehicles.`);
   };
 
-  // ── Asset Data for Reminder Modal ─────────────────────────────────────────
-  // Returns last odometer (mi), engine hours, and last maintenance date per vehicle.
+  // ── Asset Data for Reminder Modal ──────────────────────────────────────────
 
   const getVehicleAssetData = async () => {
     if (!_api || !_vehicles.length) {
@@ -164,13 +158,13 @@ const GeotabIntegration = (() => {
 
         const completedWOs = DataStore.getWorkOrders()
           .filter(w => w.vehicle === vehicle.name && w.status === 'Completed')
-          .sort((a, b) => new Date(b.date) - new Date(a.date));
+          .sort((a, b) => new Date(b.completionDate || b.date) - new Date(a.completionDate || a.date));
 
         return {
           ...vehicle,
           lastOdometer:        odomData.length  ? Math.round(odomData[0].data  * 0.000621371) : null,
           lastEngineHours:     hoursData.length ? Math.round(hoursData[0].data / 3600)         : null,
-          lastMaintenanceDate: completedWOs.length ? completedWOs[0].date : null,
+          lastMaintenanceDate: completedWOs.length ? (completedWOs[0].completionDate || completedWOs[0].date) : null,
         };
       } catch {
         return { ...vehicle, lastOdometer: null, lastEngineHours: null, lastMaintenanceDate: null };
@@ -180,9 +174,11 @@ const GeotabIntegration = (() => {
     return results;
   };
 
-  // ── Odometer Polling ──────────────────────────────────────────────────────
+  // ── Live Data Poll ─────────────────────────────────────────────────────────
+  // Fetches current odometer + engine hours for all tracked vehicles and
+  // pushes into DataStore.updateVehicleLiveData() which re-evaluates conditions.
 
-  const _pollOdometers = async () => {
+  const _pollLiveData = async () => {
     if (!_api || !_vehicles.length) return;
 
     try {
@@ -191,59 +187,71 @@ const GeotabIntegration = (() => {
 
       if (!trackedDevices.length) { _updateSyncLabel(); return; }
 
-      const promises = trackedDevices.map(device =>
-        _api.call('Get', {
-          typeName: 'StatusData',
-          search: {
-            deviceSearch:     { id: device.geotabId },
-            diagnosticSearch: { id: DIAG_ODOMETER },
-            fromDate: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-          },
-          resultsLimit: 1,
-        }).then(res => ({
-          vehicleName: device.name,
-          odometer: res.length ? Math.round(res[0].data * 0.000621371) : null,
-        })).catch(() => ({ vehicleName: device.name, odometer: null }))
-      );
+      const fromDate = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
 
-      const readings = await Promise.all(promises);
+      const readings = await Promise.all(trackedDevices.map(async (device) => {
+        try {
+          const [odomData, hoursData] = await Promise.all([
+            _api.call('Get', {
+              typeName: 'StatusData',
+              search: {
+                deviceSearch:     { id: device.geotabId },
+                diagnosticSearch: { id: DIAG_ODOMETER },
+                fromDate,
+              },
+              resultsLimit: 1,
+            }),
+            _api.call('Get', {
+              typeName: 'StatusData',
+              search: {
+                deviceSearch:     { id: device.geotabId },
+                diagnosticSearch: { id: DIAG_ENGINE_HOURS },
+                fromDate,
+              },
+              resultsLimit: 1,
+            }),
+          ]);
+          return {
+            vehicleName:    device.name,
+            odometer:       odomData.length  ? Math.round(odomData[0].data  * 0.000621371) : null,
+            engineHours:    hoursData.length ? Math.round(hoursData[0].data / 3600)         : null,
+          };
+        } catch {
+          return { vehicleName: device.name, odometer: null, engineHours: null };
+        }
+      }));
 
       let anyChanged = false;
-      readings.forEach(({ vehicleName, odometer }) => {
-        if (odometer !== null && DataStore.updateOdometer(vehicleName, odometer)) {
-          anyChanged = true;
+      readings.forEach(({ vehicleName, odometer, engineHours }) => {
+        if (odometer != null || engineHours != null) {
+          if (DataStore.updateVehicleLiveData(vehicleName, odometer, engineHours)) {
+            anyChanged = true;
+          }
         }
       });
 
       if (anyChanged && window.app) window.app.refreshAll();
 
-      _checkForTriggeredReminders();
+      _surfaceTriggeredAlerts();
       _updateSyncLabel();
 
     } catch (err) {
-      console.error('GeotabIntegration: Odometer poll failed.', err);
+      console.error('GeotabIntegration: poll failed.', err);
       _setSyncStatus(false);
     }
   };
 
-  // ── Triggered Reminder Notifications ─────────────────────────────────────
+  // ── Surface Triggered Alerts ───────────────────────────────────────────────
+  // Passes triggered per-vehicle alerts to app.js for display in Alerts tab.
 
-  const _checkForTriggeredReminders = () => {
-    const triggered = DataStore.getReminders()
-      .filter(r => r.status === 'overdue' && !r.notified)
-      .sort((a, b) =>
-        ({ High: 0, Medium: 1, Low: 2 }[a.priority] ?? 1) -
-        ({ High: 0, Medium: 1, Low: 2 }[b.priority] ?? 1)
-      );
-
-    if (triggered.length && window.app) {
-      const r = triggered[0];
-      window.app.showNotification(r, r.current - r.target);
-      DataStore.updateReminder(r.id, { notified: true });
+  const _surfaceTriggeredAlerts = () => {
+    const alerts = DataStore.getTriggeredAlerts();
+    if (window.app && typeof window.app.updateAlerts === 'function') {
+      window.app.updateAlerts(alerts);
     }
   };
 
-  // ── Status Helpers ────────────────────────────────────────────────────────
+  // ── Status Helpers ─────────────────────────────────────────────────────────
 
   const _setSyncStatus = (connected) => {
     const el   = document.getElementById('syncLabel');
@@ -270,23 +278,11 @@ const GeotabIntegration = (() => {
     }, 5000);
   };
 
-  // ── Demo Mode ─────────────────────────────────────────────────────────────
+  // ── Demo Mode ──────────────────────────────────────────────────────────────
 
   const _startDemoMode = () => {
     const el = document.getElementById('syncLabel');
-    if (el) el.textContent = 'DEMO · Click 🔔 to simulate trigger';
-
-    const bell = document.getElementById('notifBell');
-    if (bell) {
-      bell.title = 'Click to simulate a triggered odometer reminder';
-      bell.addEventListener('click', () => {
-        const overdue = DataStore.getReminders().find(r => r.status === 'overdue');
-        if (overdue && window.app) {
-          window.app.showNotification(overdue, overdue.current - overdue.target);
-        }
-      });
-    }
-
+    if (el) el.textContent = 'DEMO · No live data';
     const dot = document.getElementById('notifDot');
     if (dot) dot.style.display = 'block';
   };
@@ -294,8 +290,6 @@ const GeotabIntegration = (() => {
   return { init, destroy, getVehicles, getVehicleAssetData };
 
 })();
-
-// ── Standalone / GitHub Pages Fallback ───────────────────────────────────────
 
 if (typeof geotab === 'undefined') {
   document.addEventListener('DOMContentLoaded', () => {
