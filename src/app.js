@@ -7,19 +7,21 @@ const app = (() => {
 
   // ── State ──────────────────────────────────────────────────────────────────
 
-  let _activeTab        = 'reminders';
-  let _reminderFilter   = { query: '', status: '', vehicle: '' };
-  let _woFilter         = { query: '', status: '' };
-  let _pendingNotifReminder = null;
-  let _editingReminderId    = null;
-  let _isDark               = true;
+  let _activeTab      = 'reminders';
+  let _reminderFilter = { query: '', status: '', vehicle: '' };
+  let _woFilter       = { query: '', status: '' };
+  let _isDark         = true;
+  let _editingReminderId = null;
 
   // Asset picker state (reminder modal)
-  let _allAssets       = [];   // full list from Geotab, enriched with live data
-  let _filteredAssets  = [];   // what's shown after search
-  let _selectedAssets  = new Set(); // vehicle names currently checked
+  let _allAssets      = [];
+  let _filteredAssets = [];
+  let _selectedAssets = new Set();
 
-  // Vehicle list for work-order accept flow
+  // Live alerts (per-vehicle triggered reminders)
+  let _currentAlerts = [];
+
+  // Vehicle list for WO accept flow
   let KNOWN_VEHICLES = [];
 
   const setVehicles = (vehicles) => {
@@ -44,6 +46,7 @@ const app = (() => {
     _renderReminders();
     _renderWOStats();
     _renderWorkOrders();
+    _renderAlerts(_currentAlerts);
     _updateCounts();
   };
 
@@ -60,9 +63,9 @@ const app = (() => {
     const icon   = document.getElementById('themeIcon');
     const label  = document.getElementById('themeLabel');
     const toggle = document.getElementById('themeToggle');
-    if (icon)   icon.textContent   = dark ? '🌙' : '☀️';
-    if (label)  label.textContent  = dark ? 'DARK' : 'LIGHT';
-    if (toggle) toggle.checked     = !dark;
+    if (icon)   icon.textContent  = dark ? '🌙' : '☀️';
+    if (label)  label.textContent = dark ? 'DARK' : 'LIGHT';
+    if (toggle) toggle.checked    = !dark;
   };
 
   // ── Tabs ───────────────────────────────────────────────────────────────────
@@ -96,6 +99,134 @@ const app = (() => {
   const _updateCounts = () => {
     _set('reminderCount', DataStore.getReminders().length);
     _set('woCount',       DataStore.getWorkOrders().length);
+    const alertCount = _currentAlerts.length;
+    _set('alertCount', alertCount);
+    const alertTab = document.getElementById('tab-alerts');
+    if (alertTab) alertTab.classList.toggle('has-alerts', alertCount > 0);
+  };
+
+  // ── Alerts Tab ─────────────────────────────────────────────────────────────
+
+  // Called by geotab.js (via DataStore.getTriggeredAlerts) after each poll
+  const updateAlerts = (alerts) => {
+    _currentAlerts = alerts || [];
+    _renderAlerts(_currentAlerts);
+    _updateCounts();
+  };
+
+  const _renderAlerts = (alerts) => {
+    const container = document.getElementById('alertsContainer');
+    if (!container) return;
+
+    if (!alerts || alerts.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">✅</div>
+          <div class="empty-title">No active alerts</div>
+          <div class="empty-sub">All vehicles are within their maintenance schedule</div>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = alerts.map(alert => {
+      const { reminder, vehicleName, vehicleState } = alert;
+      const vs       = vehicleState;
+      const isOverdue = vs.status === 'overdue';
+      const badgeClass = isOverdue ? 'badge-danger' : 'badge-warn';
+      const badgeText  = isOverdue ? 'Overdue' : 'Due Soon';
+      const info       = KNOWN_VEHICLES.find(v => v.id === vehicleName);
+
+      // Build condition detail line
+      const condDetail = (() => {
+        if (!vs.triggeredBy) return '';
+        const cond = (reminder.conditions || []).find(c => c.type === vs.triggeredBy);
+        if (!cond) return '';
+        if (cond.type === 'distance') {
+          const driven = (vs.currentOdometer || 0) - (vs.lastOdometer || 0);
+          const over   = driven - cond.value;
+          return `🛣 Distance — ${driven.toLocaleString()} mi driven` + (over > 0 ? ` (${over.toLocaleString()} mi over)` : '');
+        }
+        if (cond.type === 'time') {
+          const days = Math.floor((new Date() - new Date(vs.lastMaintenanceDate)) / 86400000);
+          const over = days - cond.value;
+          return `📅 Time — ${days} days since last service` + (over > 0 ? ` (${over} days over)` : '');
+        }
+        if (cond.type === 'engineHours') {
+          const used = (vs.currentEngineHours || 0) - (vs.lastEngineHours || 0);
+          const over = used - cond.value;
+          return `⏱ Engine Hours — ${used.toLocaleString()} hrs used` + (over > 0 ? ` (${over} hrs over)` : '');
+        }
+        return '';
+      })();
+
+      return `
+        <div class="alert-card ${isOverdue ? 'alert-overdue' : 'alert-due-soon'}">
+          <div class="alert-card-header">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div class="vehicle-avatar">🚛</div>
+              <div>
+                <div style="font-weight:600;font-size:13px">${vehicleName}</div>
+                ${info ? `<div style="font-size:11px;color:var(--text-muted)">${info.make}</div>` : ''}
+              </div>
+            </div>
+            <span class="badge ${badgeClass}">${badgeText}</span>
+          </div>
+          <div class="alert-card-body">
+            <div style="font-weight:500;font-size:13px;margin-bottom:4px">${reminder.task}</div>
+            ${condDetail ? `<div style="font-size:11px;color:var(--text-muted);font-family:var(--mono)">${condDetail}</div>` : ''}
+            ${vs.lastMaintenanceDate ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Last completed: ${vs.lastMaintenanceDate}</div>` : ''}
+          </div>
+          <div class="alert-card-footer">
+            <button class="btn btn-ghost btn-sm"
+              onclick="app.dismissAlert('${reminder.id}','${vehicleName}')">Dismiss</button>
+            <button class="btn btn-primary btn-sm"
+              onclick="app.createWOFromAlert('${reminder.id}','${vehicleName}')">
+              ＋ Create Work Order
+            </button>
+          </div>
+        </div>`;
+    }).join('');
+  };
+
+  const dismissAlert = (reminderId, vehicleName) => {
+    DataStore.markAlertNotified(reminderId, vehicleName);
+    _currentAlerts = _currentAlerts.filter(
+      a => !(a.reminder.id === reminderId && a.vehicleName === vehicleName)
+    );
+    _renderAlerts(_currentAlerts);
+    _updateCounts();
+  };
+
+  const createWOFromAlert = (reminderId, vehicleName) => {
+    const reminder = DataStore.getReminder(reminderId);
+    if (!reminder) return;
+    const info = KNOWN_VEHICLES.find(v => v.id === vehicleName);
+    const vs   = reminder.vehicleStates?.[vehicleName] || {};
+
+    const wo = DataStore.addWorkOrder({
+      vehicle:    vehicleName,
+      make:       info ? info.make : '',
+      task:       reminder.task,
+      status:     'Open',
+      assignee:   reminder.assignee || 'Unassigned',
+      odo:        vs.currentOdometer ? vs.currentOdometer.toLocaleString() : '0',
+      cost:       null,
+      date:       new Date().toISOString().split('T')[0],
+      notes:      `Auto-created from reminder ${reminderId} — triggered by ${vs.triggeredBy || 'condition'}`,
+      parts:      '',
+      labor:      '',
+      reminderId,
+      vehicleName,
+    });
+
+    DataStore.markAlertNotified(reminderId, vehicleName);
+    _currentAlerts = _currentAlerts.filter(
+      a => !(a.reminder.id === reminderId && a.vehicleName === vehicleName)
+    );
+
+    refreshAll();
+    switchTab('workorders');
+    _showToast(`✓ Work Order ${wo.id} created for ${vehicleName}`);
   };
 
   // ── Render Reminders ───────────────────────────────────────────────────────
@@ -107,11 +238,16 @@ const app = (() => {
       const q = _reminderFilter.query.toLowerCase();
       data = data.filter(r => {
         const vehicles = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle];
-        return vehicles.some(v => v.toLowerCase().includes(q)) ||
-               r.task.toLowerCase().includes(q);
+        return vehicles.some(v => v.toLowerCase().includes(q)) || r.task.toLowerCase().includes(q);
       });
     }
-    if (_reminderFilter.status)  data = data.filter(r => r.status === _reminderFilter.status);
+    if (_reminderFilter.status) {
+      // Filter by worst vehicle status within the reminder
+      data = data.filter(r => {
+        const vehicles = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle];
+        return vehicles.some(v => (r.vehicleStates?.[v]?.status || 'scheduled') === _reminderFilter.status);
+      });
+    }
     if (_reminderFilter.vehicle) {
       data = data.filter(r => {
         const vehicles = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle];
@@ -124,7 +260,7 @@ const app = (() => {
     tbody.innerHTML = '';
 
     if (data.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
         <div class="empty-icon">⏰</div>
         <div class="empty-title">No reminders found</div>
         <div class="empty-sub">Create a reminder to start tracking maintenance</div>
@@ -135,23 +271,26 @@ const app = (() => {
     }
 
     data.forEach(r => {
-      const vehicles  = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle || 'Unknown'];
+      const vehicles   = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle || 'Unknown'];
       const conditions = r.conditions || [];
 
-      const statusBadge =
-        r.status === 'overdue'  ? `<span class="badge badge-danger">Overdue</span>`  :
-        r.status === 'due-soon' ? `<span class="badge badge-warn">Due Soon</span>`   :
-                                  `<span class="badge badge-ok">Scheduled</span>`;
+      // Worst status across all vehicles
+      const statuses   = vehicles.map(v => r.vehicleStates?.[v]?.status || 'scheduled');
+      const worstStatus = statuses.includes('overdue') ? 'overdue'
+                        : statuses.includes('due-soon') ? 'due-soon'
+                        : 'scheduled';
 
-      // Build a compact condition summary
-      const condSummary = conditions.length
-        ? conditions.map(c => {
-            if (c.type === 'time')         return `📅 ${c.value} days`;
-            if (c.type === 'distance')     return `🛣 ${Number(c.value).toLocaleString()} mi`;
-            if (c.type === 'engineHours')  return `⏱ ${c.value} hrs`;
-            return '';
-          }).filter(Boolean).join(' · ')
-        : '—';
+      const statusBadge =
+        worstStatus === 'overdue'  ? `<span class="badge badge-danger">Overdue</span>`  :
+        worstStatus === 'due-soon' ? `<span class="badge badge-warn">Due Soon</span>`   :
+                                     `<span class="badge badge-ok">Scheduled</span>`;
+
+      const condSummary = conditions.map(c => {
+        if (c.type === 'time')        return `📅 Every ${c.value} days`;
+        if (c.type === 'distance')    return `🛣 Every ${Number(c.value).toLocaleString()} mi`;
+        if (c.type === 'engineHours') return `⏱ Every ${c.value} hrs`;
+        return '';
+      }).filter(Boolean).join(' · ') || '—';
 
       const prioClass  = r.priority === 'High' ? 'priority-high' : r.priority === 'Medium' ? 'priority-medium' : 'priority-low';
       const pillsHTML  = _renderVehicleMiniPills(vehicles);
@@ -216,7 +355,7 @@ const app = (() => {
       tbody.innerHTML = `<tr><td colspan="9"><div class="empty-state">
         <div class="empty-icon">📋</div>
         <div class="empty-title">No work orders</div>
-        <div class="empty-sub">Accept a reminder or create one manually</div>
+        <div class="empty-sub">Work orders appear here when alerts are accepted</div>
       </div></td></tr>`;
       _set('woRowCount', 0);
       return;
@@ -266,112 +405,12 @@ const app = (() => {
   const filterWorkOrders         = (q) => { _woFilter.query         = q; _renderWorkOrders(); };
   const filterWOByStatus         = (s) => { _woFilter.status        = s; _renderWorkOrders(); };
 
-  // ── Notifications ──────────────────────────────────────────────────────────
-
-  const showNotification = (reminder, milesOver) => {
-    _pendingNotifReminder = reminder;
-    const vehicles = Array.isArray(reminder.vehicles) ? reminder.vehicles : [reminder.vehicle];
-    document.getElementById('notifTitle').textContent =
-      `Maintenance Reminder Triggered — ${vehicles.join(', ')}`;
-    document.getElementById('notifDesc').textContent =
-      `${reminder.task} is due` +
-      (milesOver > 0 ? ` — ${milesOver.toLocaleString()} mi over trigger` : '');
-    document.getElementById('notifBanner').style.display = 'flex';
-    const dot = document.getElementById('notifDot');
-    if (dot) dot.style.display = 'none';
-  };
-
-  const dismissNotif = () => {
-    document.getElementById('notifBanner').style.display = 'none';
-    _pendingNotifReminder = null;
-  };
-
-  // ── Accept Modal ───────────────────────────────────────────────────────────
-
-  const openAcceptModal = () => {
-    dismissNotif();
-    if (!_pendingNotifReminder) return;
-    const r = _pendingNotifReminder;
-    const over = r.current - r.target;
-    const vehicles = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle];
-
-    document.getElementById('acceptModalBody').innerHTML = `
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
-        Review the triggered reminder and confirm to automatically generate Work Orders.
-      </div>
-      <div class="accept-preview">
-        <div class="accept-preview-row">
-          <span class="accept-preview-label">Vehicles</span>
-          <span class="accept-preview-value">${vehicles.join(', ')}</span>
-        </div>
-        <div class="accept-preview-row">
-          <span class="accept-preview-label">Task</span>
-          <span class="accept-preview-value">${r.task}</span>
-        </div>
-        <div class="accept-preview-row">
-          <span class="accept-preview-label">Priority</span>
-          <span class="accept-preview-value" style="color:var(--danger)">${r.priority}</span>
-        </div>
-        ${vehicles.length > 1 ? `<div class="accept-preview-row">
-          <span class="accept-preview-label">Orders to Create</span>
-          <span class="accept-preview-value" style="color:var(--accent2)">${vehicles.length} orders (one per vehicle)</span>
-        </div>` : ''}
-      </div>
-      <div class="form-section-label">Work Order Details</div>
-      <div class="form-grid">
-        <div class="form-group">
-          <label>Assigned Technician</label>
-          <input type="text" id="accept-assignee" placeholder="Name or shop" value="${r.assignee || ''}">
-        </div>
-        <div class="form-group">
-          <label>Scheduled Date</label>
-          <input type="date" id="accept-date" value="${new Date().toISOString().split('T')[0]}">
-        </div>
-        <div class="form-group full">
-          <label>Initial Notes</label>
-          <textarea id="accept-notes" placeholder="Pre-work notes...">${r.notes || ''}</textarea>
-        </div>
-      </div>`;
-
-    document.getElementById('acceptModal').style.display = 'flex';
-  };
-
-  const acceptAndCreateWO = () => {
-    if (!_pendingNotifReminder) return;
-    const r        = _pendingNotifReminder;
-    const vehicles = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle];
-    const assignee = document.getElementById('accept-assignee')?.value || 'Unassigned';
-    const date     = document.getElementById('accept-date')?.value    || new Date().toISOString().split('T')[0];
-    const notes    = document.getElementById('accept-notes')?.value   || '';
-
-    const created = vehicles.map(vehicleId => {
-      const info = KNOWN_VEHICLES.find(v => v.id === vehicleId);
-      return DataStore.addWorkOrder({
-        vehicle: vehicleId, make: info ? info.make : '',
-        task: r.task, status: 'Open', assignee,
-        odo: r.current ? r.current.toLocaleString() : '0',
-        cost: null, date,
-        notes: notes || `Auto-created from reminder ${r.id}`,
-        parts: '', labor: '', reminderId: r.id,
-      });
-    });
-
-    closeModal('acceptModal');
-    _pendingNotifReminder = null;
-    refreshAll();
-    switchTab('workorders');
-    _showToast(created.length === 1
-      ? `✓ Work Order ${created[0].id} created`
-      : `✓ ${created.length} Work Orders created`);
-  };
-
   // ── Reminder Modal ─────────────────────────────────────────────────────────
 
   const openReminderModal = async (reminderId) => {
     _editingReminderId = reminderId || null;
     const existing = reminderId ? DataStore.getReminder(reminderId) : null;
 
-    // Reset asset state
     _selectedAssets = new Set(
       existing
         ? (Array.isArray(existing.vehicles) ? existing.vehicles : [existing.vehicle].filter(Boolean))
@@ -381,35 +420,31 @@ const app = (() => {
     document.getElementById('reminderModalTitle').textContent =
       existing ? `✏️ Edit Reminder — ${existing.task}` : '＋ New Maintenance Reminder';
 
-    // Render the modal shell with a loading state for the assets table
     document.getElementById('reminderModalBody').innerHTML = _getReminderFormHTML(existing);
     document.getElementById('reminderModal').style.display = 'flex';
 
-    // Load asset data from Geotab async, then populate the table
     _renderAssetTableLoading();
     try {
       _allAssets      = await GeotabIntegration.getVehicleAssetData();
       _filteredAssets = [..._allAssets];
-      _renderAssetTable();
+      _renderAssetTable(existing);
     } catch (err) {
       console.error('Could not load asset data:', err);
-      // Fall back to plain vehicle list from KNOWN_VEHICLES
       _allAssets      = KNOWN_VEHICLES.map(v => ({ name: v.id, id: v.id, make: v.make, lastOdometer: null, lastEngineHours: null, lastMaintenanceDate: null }));
       _filteredAssets = [..._allAssets];
-      _renderAssetTable();
+      _renderAssetTable(existing);
     }
   };
 
   // ── Reminder Form HTML ─────────────────────────────────────────────────────
 
   const _getReminderFormHTML = (r) => {
-    const existingConditions = r && r.conditions ? r.conditions : [];
-    const hasTime  = existingConditions.find(c => c.type === 'time');
-    const hasDist  = existingConditions.find(c => c.type === 'distance');
-    const hasHours = existingConditions.find(c => c.type === 'engineHours');
+    const ec   = r && r.conditions ? r.conditions : [];
+    const hasT = ec.find(c => c.type === 'time');
+    const hasD = ec.find(c => c.type === 'distance');
+    const hasH = ec.find(c => c.type === 'engineHours');
 
     return `
-    <!-- ── Task & Priority ── -->
     <div class="form-section-label">Task &amp; Details</div>
     <div class="form-grid">
       <div class="form-group">
@@ -428,9 +463,9 @@ const app = (() => {
       <div class="form-group">
         <label>Priority</label>
         <select id="r-priority">
-          <option${r && r.priority === 'High'   ? ' selected' : ''}>High</option>
+          <option${r && r.priority === 'High'    ? ' selected' : ''}>High</option>
           <option${!r || r.priority === 'Medium' ? ' selected' : ''}>Medium</option>
-          <option${r && r.priority === 'Low'    ? ' selected' : ''}>Low</option>
+          <option${r && r.priority === 'Low'     ? ' selected' : ''}>Low</option>
         </select>
       </div>
       <div class="form-group">
@@ -443,103 +478,72 @@ const app = (() => {
       </div>
     </div>
 
-    <!-- ── Conditions ── -->
     <div class="form-section-label" style="margin-top:20px">Conditions
-      <span style="font-weight:400;font-size:10px;color:var(--text-dim);text-transform:none;letter-spacing:0;margin-left:6px">Select one or more trigger conditions</span>
+      <span style="font-weight:400;font-size:10px;color:var(--text-dim);text-transform:none;letter-spacing:0;margin-left:6px">
+        Reminder triggers when the first condition is met
+      </span>
     </div>
     <div class="conditions-wrap">
-
-      <!-- Time -->
-      <div class="condition-block" id="cond-time-block">
+      <div class="condition-block">
         <label class="condition-toggle">
-          <input type="checkbox" id="cond-time-check" onchange="app._toggleCondition('time')"
-            ${hasTime ? 'checked' : ''}>
+          <input type="checkbox" id="cond-time-check" onchange="app._toggleCondition('time')" ${hasT ? 'checked' : ''}>
           <span class="condition-label">📅 Repeats by time</span>
         </label>
-        <div class="condition-fields" id="cond-time-fields" style="display:${hasTime ? 'flex' : 'none'}">
-          <div class="form-group">
-            <label>Every (days)</label>
-            <input type="number" id="cond-time-value" placeholder="e.g. 90" value="${hasTime ? hasTime.value : ''}">
-          </div>
-          <div class="form-group">
-            <label>Warn (days before)</label>
-            <input type="number" id="cond-time-warn" placeholder="e.g. 7" value="${hasTime ? hasTime.warn || '' : ''}">
-          </div>
+        <div class="condition-fields" id="cond-time-fields" style="display:${hasT ? 'flex' : 'none'}">
+          <div class="form-group"><label>Every (days)</label><input type="number" id="cond-time-value" placeholder="e.g. 90" value="${hasT ? hasT.value : ''}"></div>
+          <div class="form-group"><label>Warn (days before)</label><input type="number" id="cond-time-warn" placeholder="e.g. 7" value="${hasT ? hasT.warn || '' : ''}"></div>
         </div>
       </div>
-
-      <!-- Distance -->
-      <div class="condition-block" id="cond-distance-block">
+      <div class="condition-block">
         <label class="condition-toggle">
-          <input type="checkbox" id="cond-distance-check" onchange="app._toggleCondition('distance')"
-            ${hasDist ? 'checked' : ''}>
+          <input type="checkbox" id="cond-distance-check" onchange="app._toggleCondition('distance')" ${hasD ? 'checked' : ''}>
           <span class="condition-label">🛣 Repeats by distance</span>
         </label>
-        <div class="condition-fields" id="cond-distance-fields" style="display:${hasDist ? 'flex' : 'none'}">
-          <div class="form-group">
-            <label>Every (miles)</label>
-            <input type="number" id="cond-distance-value" placeholder="e.g. 5000" value="${hasDist ? hasDist.value : ''}">
-          </div>
-          <div class="form-group">
-            <label>Warn (miles before)</label>
-            <input type="number" id="cond-distance-warn" placeholder="e.g. 500" value="${hasDist ? hasDist.warn || '' : ''}">
-          </div>
+        <div class="condition-fields" id="cond-distance-fields" style="display:${hasD ? 'flex' : 'none'}">
+          <div class="form-group"><label>Every (miles)</label><input type="number" id="cond-distance-value" placeholder="e.g. 5000" value="${hasD ? hasD.value : ''}"></div>
+          <div class="form-group"><label>Warn (miles before)</label><input type="number" id="cond-distance-warn" placeholder="e.g. 500" value="${hasD ? hasD.warn || '' : ''}"></div>
         </div>
       </div>
-
-      <!-- Engine Hours -->
-      <div class="condition-block" id="cond-hours-block">
+      <div class="condition-block">
         <label class="condition-toggle">
-          <input type="checkbox" id="cond-hours-check" onchange="app._toggleCondition('engineHours')"
-            ${hasHours ? 'checked' : ''}>
+          <input type="checkbox" id="cond-hours-check" onchange="app._toggleCondition('engineHours')" ${hasH ? 'checked' : ''}>
           <span class="condition-label">⏱ Repeats by engine hours</span>
         </label>
-        <div class="condition-fields" id="cond-hours-fields" style="display:${hasHours ? 'flex' : 'none'}">
-          <div class="form-group">
-            <label>Every (hours)</label>
-            <input type="number" id="cond-hours-value" placeholder="e.g. 250" value="${hasHours ? hasHours.value : ''}">
-          </div>
-          <div class="form-group">
-            <label>Warn (hours before)</label>
-            <input type="number" id="cond-hours-warn" placeholder="e.g. 10" value="${hasHours ? hasHours.warn || '' : ''}">
-          </div>
+        <div class="condition-fields" id="cond-hours-fields" style="display:${hasH ? 'flex' : 'none'}">
+          <div class="form-group"><label>Every (hours)</label><input type="number" id="cond-hours-value" placeholder="e.g. 250" value="${hasH ? hasH.value : ''}"></div>
+          <div class="form-group"><label>Warn (hours before)</label><input type="number" id="cond-hours-warn" placeholder="e.g. 10" value="${hasH ? hasH.warn || '' : ''}"></div>
         </div>
       </div>
-
     </div>
 
-    <!-- ── Assets ── -->
     <div class="form-section-label" style="margin-top:20px">Assets
-      <span style="font-weight:400;font-size:10px;color:var(--text-dim);text-transform:none;letter-spacing:0;margin-left:6px">Select vehicles to apply this reminder to</span>
+      <span style="font-weight:400;font-size:10px;color:var(--text-dim);text-transform:none;letter-spacing:0;margin-left:6px">
+        Select vehicles — <strong style="color:var(--warn)">Last Maintenance Date is required</strong> per vehicle
+      </span>
     </div>
     <div class="asset-picker-wrap">
       <div class="asset-picker-toolbar">
         <input class="search-input" id="assetSearch" placeholder="Search assets..."
           oninput="app._filterAssets(this.value)" style="max-width:260px">
-        <button class="btn btn-ghost btn-sm" onclick="app._selectAllAssets()" id="assetSelectAllBtn">Select All</button>
-        <span id="assetSelectedCount" style="font-family:var(--mono);font-size:11px;color:var(--text-muted);margin-left:auto">
-          0 selected
-        </span>
+        <button class="btn btn-ghost btn-sm" onclick="app._selectAllAssets()">Select All</button>
+        <span id="assetSelectedCount" style="font-family:var(--mono);font-size:11px;color:var(--text-muted);margin-left:auto">0 selected</span>
       </div>
-      <div id="assetTableWrap">
-        <!-- Populated async by openReminderModal -->
-      </div>
+      <div id="assetTableWrap"></div>
     </div>`;
   };
 
-  // ── Asset Table Rendering ──────────────────────────────────────────────────
+  // ── Asset Table ────────────────────────────────────────────────────────────
 
   const _renderAssetTableLoading = () => {
     const wrap = document.getElementById('assetTableWrap');
     if (!wrap) return;
-    wrap.innerHTML = `
-      <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px">
-        <span class="spinner-border spinner-border-sm" style="width:14px;height:14px;border-width:2px;display:inline-block;border-radius:50%;border:2px solid var(--text-dim);border-top-color:var(--accent2);animation:spin 0.7s linear infinite;margin-right:8px"></span>
-        Loading vehicles from Geotab...
-      </div>`;
+    wrap.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px">
+      <span style="display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid var(--text-dim);border-top-color:var(--accent2);animation:spin 0.7s linear infinite;margin-right:8px;vertical-align:middle"></span>
+      Loading vehicles from Geotab...
+    </div>`;
   };
 
-  const _renderAssetTable = () => {
+  const _renderAssetTable = (existingReminder) => {
     const wrap = document.getElementById('assetTableWrap');
     if (!wrap) return;
 
@@ -550,52 +554,63 @@ const app = (() => {
       return;
     }
 
-    const allFilteredSelected = _filteredAssets.length > 0 &&
-      _filteredAssets.every(a => _selectedAssets.has(a.name));
+    const allFilteredSelected = _filteredAssets.every(a => _selectedAssets.has(a.name));
+
+    // Build rows — selected vehicles show a required last-maintenance-date input
+    const rows = _filteredAssets.map(a => {
+      const selected = _selectedAssets.has(a.name);
+      // Pre-fill from existing reminder's vehicleStates if editing
+      const existingVS   = existingReminder?.vehicleStates?.[a.name];
+      const prefillDate  = existingVS?.lastMaintenanceDate || a.lastMaintenanceDate || '';
+
+      return `
+        <tr class="asset-row${selected ? ' selected' : ''}" onclick="app._toggleAsset('${a.name}')">
+          <td onclick="event.stopPropagation()">
+            <input type="checkbox" ${selected ? 'checked' : ''} onchange="app._toggleAsset('${a.name}')">
+          </td>
+          <td>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div class="vehicle-avatar" style="width:28px;height:28px;font-size:13px">🚛</div>
+              <div>
+                <div style="font-weight:500;font-size:12px">${a.name}</div>
+                ${a.make ? `<div style="font-size:11px;color:var(--text-muted)">${a.make}</div>` : ''}
+              </div>
+            </div>
+          </td>
+          <td>
+            ${selected
+              ? `<input type="date" class="last-maint-input" id="lastMaint_${a.name}"
+                   value="${prefillDate}"
+                   onclick="event.stopPropagation()"
+                   onchange="event.stopPropagation()"
+                   style="font-size:11px;padding:4px 8px;border-radius:4px;border:1px solid var(--border,rgba(255,255,255,0.15));background:var(--input-bg,rgba(255,255,255,0.06));color:var(--text);width:140px"
+                   required>`
+              : `<span style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">${a.lastMaintenanceDate || '—'}</span>`
+            }
+          </td>
+          <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">
+            ${a.lastOdometer != null ? a.lastOdometer.toLocaleString() + ' mi' : '—'}
+          </td>
+          <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">
+            ${a.lastEngineHours != null ? a.lastEngineHours.toLocaleString() + ' hrs' : '—'}
+          </td>
+        </tr>`;
+    }).join('');
 
     wrap.innerHTML = `
       <table class="asset-table">
         <thead>
           <tr>
             <th style="width:36px">
-              <input type="checkbox" id="assetCheckAll"
-                ${allFilteredSelected ? 'checked' : ''}
-                onchange="app._toggleAllFiltered(this.checked)">
+              <input type="checkbox" ${allFilteredSelected ? 'checked' : ''} onchange="app._toggleAllFiltered(this.checked)">
             </th>
             <th>Asset</th>
-            <th>Last Maintenance</th>
+            <th>Last Maintenance Date <span style="color:var(--danger)">*</span></th>
             <th>Last Odometer</th>
             <th>Last Engine Hours</th>
           </tr>
         </thead>
-        <tbody>
-          ${_filteredAssets.map(a => `
-            <tr class="asset-row${_selectedAssets.has(a.name) ? ' selected' : ''}"
-                onclick="app._toggleAsset('${a.name}')">
-              <td onclick="event.stopPropagation()">
-                <input type="checkbox" ${_selectedAssets.has(a.name) ? 'checked' : ''}
-                  onchange="app._toggleAsset('${a.name}')">
-              </td>
-              <td>
-                <div style="display:flex;align-items:center;gap:8px">
-                  <div class="vehicle-avatar" style="width:28px;height:28px;font-size:13px">🚛</div>
-                  <div>
-                    <div style="font-weight:500;font-size:12px">${a.name}</div>
-                    ${a.make ? `<div style="font-size:11px;color:var(--text-muted)">${a.make}</div>` : ''}
-                  </div>
-                </div>
-              </td>
-              <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">
-                ${a.lastMaintenanceDate || '—'}
-              </td>
-              <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">
-                ${a.lastOdometer != null ? a.lastOdometer.toLocaleString() + ' mi' : '—'}
-              </td>
-              <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">
-                ${a.lastEngineHours != null ? a.lastEngineHours.toLocaleString() + ' hrs' : '—'}
-              </td>
-            </tr>`).join('')}
-        </tbody>
+        <tbody>${rows}</tbody>
       </table>`;
   };
 
@@ -610,50 +625,40 @@ const app = (() => {
     } else {
       _selectedAssets.add(name);
     }
-    _renderAssetTable();
+    // Re-render to show/hide the date input for the toggled vehicle
+    const existing = _editingReminderId ? DataStore.getReminder(_editingReminderId) : null;
+    _renderAssetTable(existing);
   };
 
   const _toggleAllFiltered = (checked) => {
-    _filteredAssets.forEach(a => {
-      if (checked) {
-        _selectedAssets.add(a.name);
-      } else {
-        _selectedAssets.delete(a.name);
-      }
-    });
-    _renderAssetTable();
+    _filteredAssets.forEach(a => checked ? _selectedAssets.add(a.name) : _selectedAssets.delete(a.name));
+    const existing = _editingReminderId ? DataStore.getReminder(_editingReminderId) : null;
+    _renderAssetTable(existing);
   };
 
   const _selectAllAssets = () => {
     const allSelected = _filteredAssets.every(a => _selectedAssets.has(a.name));
-    _filteredAssets.forEach(a => {
-      if (allSelected) {
-        _selectedAssets.delete(a.name);
-      } else {
-        _selectedAssets.add(a.name);
-      }
-    });
-    _renderAssetTable();
+    _filteredAssets.forEach(a => allSelected ? _selectedAssets.delete(a.name) : _selectedAssets.add(a.name));
+    const existing = _editingReminderId ? DataStore.getReminder(_editingReminderId) : null;
+    _renderAssetTable(existing);
   };
 
   const _filterAssets = (query) => {
     const q = query.toLowerCase();
     _filteredAssets = q
-      ? _allAssets.filter(a =>
-          a.name.toLowerCase().includes(q) ||
-          (a.make || '').toLowerCase().includes(q)
-        )
+      ? _allAssets.filter(a => a.name.toLowerCase().includes(q) || (a.make || '').toLowerCase().includes(q))
       : [..._allAssets];
-    _renderAssetTable();
+    const existing = _editingReminderId ? DataStore.getReminder(_editingReminderId) : null;
+    _renderAssetTable(existing);
   };
 
   // ── Condition Toggle ───────────────────────────────────────────────────────
 
   const _toggleCondition = (type) => {
-    const fieldMap = { time: 'cond-time-fields', distance: 'cond-distance-fields', engineHours: 'cond-hours-fields' };
-    const checkMap = { time: 'cond-time-check',  distance: 'cond-distance-check',  engineHours: 'cond-hours-check'  };
-    const checked  = document.getElementById(checkMap[type])?.checked;
-    const fields   = document.getElementById(fieldMap[type]);
+    const map = { time: 'cond-time', distance: 'cond-distance', engineHours: 'cond-hours' };
+    const base = map[type];
+    const checked = document.getElementById(base + '-check')?.checked;
+    const fields  = document.getElementById(base + '-fields');
     if (fields) fields.style.display = checked ? 'flex' : 'none';
   };
 
@@ -669,30 +674,36 @@ const app = (() => {
       _showToast('Please select at least one vehicle', true); return;
     }
 
+    // Validate last maintenance dates for all selected vehicles
+    const vehicles = [..._selectedAssets];
+    const missingDate = vehicles.find(v => {
+      const input = document.getElementById(`lastMaint_${v}`);
+      return !input || !input.value;
+    });
+    if (missingDate) {
+      _showToast(`Last Maintenance Date is required for ${missingDate}`, true); return;
+    }
+
     // Collect conditions
     const conditions = [];
-
     if (document.getElementById('cond-time-check')?.checked) {
       const val  = parseInt(document.getElementById('cond-time-value')?.value);
       const warn = parseInt(document.getElementById('cond-time-warn')?.value)  || 0;
       if (!val) { _showToast('Please enter a value for the Time condition', true); return; }
       conditions.push({ type: 'time', value: val, warn });
     }
-
     if (document.getElementById('cond-distance-check')?.checked) {
       const val  = parseInt(document.getElementById('cond-distance-value')?.value);
       const warn = parseInt(document.getElementById('cond-distance-warn')?.value) || 0;
       if (!val) { _showToast('Please enter a value for the Distance condition', true); return; }
       conditions.push({ type: 'distance', value: val, warn });
     }
-
     if (document.getElementById('cond-hours-check')?.checked) {
       const val  = parseInt(document.getElementById('cond-hours-value')?.value);
       const warn = parseInt(document.getElementById('cond-hours-warn')?.value)  || 0;
       if (!val) { _showToast('Please enter a value for the Engine Hours condition', true); return; }
       conditions.push({ type: 'engineHours', value: val, warn });
     }
-
     if (conditions.length === 0) {
       _showToast('Please select at least one condition', true); return;
     }
@@ -702,19 +713,32 @@ const app = (() => {
     const task    = taskSel === 'Custom Issue / Repair' ? (customT || 'Custom Task') : taskSel;
     if (!task) { _showToast('Please select a task', true); return; }
 
-    const vehicles = [..._selectedAssets];
+    // Build vehicleStates — per-vehicle tracking object
+    const existingReminder = _editingReminderId ? DataStore.getReminder(_editingReminderId) : null;
+    const vehicleStates    = {};
 
-    // Determine overall status from distance condition if present
-    const distCond = conditions.find(c => c.type === 'distance');
-    let status = 'scheduled';
-    if (distCond) {
-      // Get current odometer of first vehicle as proxy
-      const firstAsset = _allAssets.find(a => a.name === vehicles[0]);
-      if (firstAsset && firstAsset.lastOdometer != null) {
-        if (firstAsset.lastOdometer >= distCond.value) status = 'overdue';
-        else if (distCond.value - firstAsset.lastOdometer <= distCond.warn) status = 'due-soon';
-      }
-    }
+    vehicles.forEach(vehicleName => {
+      const input           = document.getElementById(`lastMaint_${vehicleName}`);
+      const lastMaintDate   = input?.value || '';
+      const assetData       = _allAssets.find(a => a.name === vehicleName) || {};
+      const existingVS      = existingReminder?.vehicleStates?.[vehicleName] || {};
+
+      vehicleStates[vehicleName] = {
+        lastMaintenanceDate:  lastMaintDate,
+        lastOdometer:         assetData.lastOdometer    ?? existingVS.lastOdometer    ?? 0,
+        lastEngineHours:      assetData.lastEngineHours ?? existingVS.lastEngineHours ?? 0,
+        currentOdometer:      existingVS.currentOdometer    || assetData.lastOdometer    || 0,
+        currentEngineHours:   existingVS.currentEngineHours || assetData.lastEngineHours || 0,
+        status:    'scheduled',
+        notified:  false,
+        triggeredBy: null,
+      };
+
+      // Evaluate initial status
+      const { status, triggeredBy } = DataStore.evaluateConditions(conditions, vehicleStates[vehicleName]);
+      vehicleStates[vehicleName].status      = status;
+      vehicleStates[vehicleName].triggeredBy = triggeredBy;
+    });
 
     const data = {
       vehicles,
@@ -722,15 +746,17 @@ const app = (() => {
       make:     KNOWN_VEHICLES.find(v => v.id === vehicles[0])?.make || '',
       task,
       conditions,
-      // Legacy fields for backward compat with odometer polling
-      type:     distCond ? 'Interval' : conditions[0]?.type === 'time' ? 'Date' : 'Engine Hours',
-      target:   distCond ? distCond.value : 0,
-      warn:     distCond ? distCond.warn  : 0,
-      current:  _allAssets.find(a => a.name === vehicles[0])?.lastOdometer || 0,
-      status,
-      priority: document.getElementById('r-priority')?.value || 'Medium',
+      vehicleStates,
+      priority: document.getElementById('r-priority')?.value  || 'Medium',
       assignee: document.getElementById('r-assignee')?.value?.trim() || '',
       notes:    document.getElementById('r-notes')?.value?.trim()    || '',
+      // Legacy fields kept for backward compat
+      type:   conditions.find(c => c.type === 'distance') ? 'Interval' : 'Date',
+      target: conditions.find(c => c.type === 'distance')?.value || 0,
+      warn:   conditions.find(c => c.type === 'distance')?.warn  || 0,
+      status: Object.values(vehicleStates).some(vs => vs.status === 'overdue')  ? 'overdue'
+            : Object.values(vehicleStates).some(vs => vs.status === 'due-soon') ? 'due-soon'
+            : 'scheduled',
     };
 
     if (_editingReminderId) {
@@ -827,6 +853,7 @@ const app = (() => {
       </div>
       ${wo.reminderId ? `<div style="margin-top:12px;padding:10px 14px;background:rgba(121,192,255,0.05);border:1px solid rgba(121,192,255,0.2);border-radius:8px;font-size:12px;color:var(--text-muted)">
         🔗 Auto-generated from Reminder <span style="color:var(--accent2);font-family:var(--mono)">${wo.reminderId}</span>
+        ${wo.vehicleName ? ` for vehicle <span style="color:var(--accent2);font-family:var(--mono)">${wo.vehicleName}</span>` : ''}
       </div>` : ''}`;
   };
 
@@ -834,20 +861,18 @@ const app = (() => {
     const vehicle = document.getElementById('wo-vehicle')?.value?.trim();
     const task    = document.getElementById('wo-task')?.value?.trim();
     if (!vehicle || !task) { _showToast('Vehicle and Task are required', true); return; }
-
     const wo = DataStore.addWorkOrder({
       vehicle, make: document.getElementById('wo-make')?.value?.trim() || '',
       task, status: 'Open',
       assignee: document.getElementById('wo-assignee')?.value?.trim() || 'Unassigned',
       odo:  document.getElementById('wo-odo')?.value  || '0',
-      cost: parseFloat(document.getElementById('wo-cost')?.value)  || null,
+      cost: parseFloat(document.getElementById('wo-cost')?.value)     || null,
       date: document.getElementById('wo-date')?.value || new Date().toISOString().split('T')[0],
       notes: document.getElementById('wo-notes')?.value?.trim()  || '',
       parts: document.getElementById('wo-parts')?.value?.trim()  || '',
       labor: document.getElementById('wo-labor')?.value?.trim()  || '',
       reminderId: null,
     });
-
     closeModal('woModal');
     refreshAll();
     _showToast(`✓ Work Order ${wo.id} created`);
@@ -869,19 +894,36 @@ const app = (() => {
   };
 
   const _saveAndCompleteWO = (woId) => {
+    const wo = DataStore.getWorkOrder(woId);
+    const completionDate = document.getElementById('wo-completion-date')?.value || new Date().toISOString().split('T')[0];
+    const odo            = document.getElementById('wo-odo')?.value || '';
+    const hoursInput     = parseFloat(odo) || null;
+
     DataStore.updateWorkOrder(woId, {
       status: 'Completed',
       assignee:       document.getElementById('wo-assignee')?.value       || '',
-      odo:            document.getElementById('wo-odo')?.value            || '',
+      odo,
       notes:          document.getElementById('wo-notes')?.value          || '',
       parts:          document.getElementById('wo-parts')?.value          || '',
       labor:          document.getElementById('wo-labor')?.value          || '',
       cost:           parseFloat(document.getElementById('wo-cost')?.value) || null,
-      completionDate: document.getElementById('wo-completion-date')?.value || new Date().toISOString().split('T')[0],
+      completionDate,
     });
+
+    // Reset the vehicle's reminder state so the cycle restarts from this date
+    if (wo && wo.reminderId && wo.vehicleName) {
+      DataStore.resetVehicleReminderState(
+        wo.reminderId,
+        wo.vehicleName,
+        completionDate,
+        parseFloat(odo.replace(/,/g, '')) || null,
+        null
+      );
+    }
+
     closeModal('woModal');
     refreshAll();
-    _showToast('Work Order marked as Completed');
+    _showToast('Work Order marked as Completed — reminder cycle reset');
   };
 
   const _updateWO = (woId, status) => {
@@ -905,13 +947,11 @@ const app = (() => {
 
   const _showToast = (msg, error = false) => {
     const el = document.createElement('div');
-    el.className  = 'toast' + (error ? ' error' : '');
+    el.className   = 'toast' + (error ? ' error' : '');
     el.textContent = msg;
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 3500);
   };
-
-  // ── Utility ────────────────────────────────────────────────────────────────
 
   const _set = (id, val) => {
     const el = document.getElementById(id);
@@ -922,12 +962,12 @@ const app = (() => {
 
   return {
     init, refreshAll, switchTab, toggleTheme,
-    setVehicles,
+    setVehicles, updateAlerts,
     filterReminders, filterRemindersByStatus, filterRemindersByVehicle,
     openReminderModal, saveReminder, deleteReminder,
     _taskSelectChanged, _toggleCondition,
     _toggleAsset, _toggleAllFiltered, _selectAllAssets, _filterAssets,
-    showNotification, dismissNotif, openAcceptModal, acceptAndCreateWO,
+    dismissAlert, createWOFromAlert,
     filterWorkOrders, filterWOByStatus,
     openWOModal, _saveNewWO, _saveWOEdits, _saveAndCompleteWO, _updateWO,
     closeModal, closeModalOnOverlay,
@@ -935,5 +975,4 @@ const app = (() => {
 
 })();
 
-// Expose to global scope so inline onclick attributes can reach it
 window.app = app;
