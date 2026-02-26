@@ -31,6 +31,17 @@
 
     /* ── Spinner keyframes ── */
     @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* ── Alert Cards ── */
+    .alert-card { border-radius:10px; border:1px solid var(--border,rgba(255,255,255,0.08)); margin-bottom:12px; overflow:hidden; }
+    .alert-overdue  { border-left:3px solid var(--danger,#f85149); }
+    .alert-due-soon { border-left:3px solid var(--warn,#e3b341); }
+    .alert-card-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; background:var(--card-bg,rgba(255,255,255,0.04)); }
+    .alert-card-body   { padding:10px 16px; font-size:12px; }
+    .alert-card-footer { display:flex; justify-content:flex-end; gap:8px; padding:10px 16px; border-top:1px solid var(--border,rgba(255,255,255,0.06)); }
+
+    /* Alert tab highlight when there are active alerts */
+    #tab-alerts.has-alerts .tab-count { background:var(--danger,#f85149); color:#fff; }
   </style>
 </head>
 <body>
@@ -87,6 +98,10 @@
     <div class="tab" id="tab-workorders" onclick="app.switchTab('workorders')">
       <span>📋</span> Work Orders
       <span class="tab-count" id="woCount">0</span>
+    </div>
+    <div class="tab" id="tab-alerts" onclick="app.switchTab('alerts')">
+      <span>🔔</span> Alerts
+      <span class="tab-count" id="alertCount">0</span>
     </div>
   </div>
 
@@ -220,6 +235,14 @@
         </table>
       </div>
     </div>
+    <!-- Alerts Panel -->
+    <div class="panel" id="panel-alerts">
+      <div class="panel-header">
+        <div class="panel-title">Alerts <span>/ Active Triggered Reminders</span></div>
+      </div>
+      <div id="alertsContainer" style="padding:8px 0"></div>
+    </div>
+
   </div>
 
   <!-- ── Reminder Modal ── -->
