@@ -1,36 +1,32 @@
 /**
  * app.js
  * Main UI controller for the Fleet Maintenance Add-in.
- * Handles rendering, modals, filtering, theme toggle, and user interactions.
  */
 
 const app = (() => {
 
-  // State
-  let _activeTab = 'reminders';
-  let _reminderFilter = { query: '', status: '', vehicle: '' };
-  let _woFilter = { query: '', status: '' };
+  // ── State ──────────────────────────────────────────────────────────────────
+
+  let _activeTab        = 'reminders';
+  let _reminderFilter   = { query: '', status: '', vehicle: '' };
+  let _woFilter         = { query: '', status: '' };
   let _pendingNotifReminder = null;
-  let _editingReminderId = null;
-  let _isDark = true;
+  let _editingReminderId    = null;
+  let _isDark               = true;
 
-  // Multi-vehicle picker state (used while reminder modal is open)
-  let _pickerSelected = [];
+  // Asset picker state (reminder modal)
+  let _allAssets       = [];   // full list from Geotab, enriched with live data
+  let _filteredAssets  = [];   // what's shown after search
+  let _selectedAssets  = new Set(); // vehicle names currently checked
 
-  // Vehicle list — populated by geotab.js via setVehicles() once the
-  // Geotab API loads all Devices from the current session database.
+  // Vehicle list for work-order accept flow
   let KNOWN_VEHICLES = [];
 
-  // Called by geotab.js once real vehicles are loaded from the API
   const setVehicles = (vehicles) => {
     KNOWN_VEHICLES = vehicles.map(v => ({
       id:   v.name,
       make: [v.year, v.make].filter(Boolean).join(' ') || v.licensePlate || '',
     }));
-    // Refresh the reminder modal picker if it's currently open
-    const picker = document.getElementById('vehiclePicker');
-    if (picker) _refreshPickerUI();
-    // Refresh stats so vehicle count updates
     _renderReminderStats();
   };
 
@@ -51,7 +47,7 @@ const app = (() => {
     _updateCounts();
   };
 
-  // ── Theme Toggle ───────────────────────────────────────────────────────────
+  // ── Theme ──────────────────────────────────────────────────────────────────
 
   const toggleTheme = (isChecked) => {
     _isDark = !isChecked;
@@ -61,15 +57,15 @@ const app = (() => {
 
   const _applyTheme = (dark) => {
     document.body.classList.toggle('light', !dark);
-    const icon  = document.getElementById('themeIcon');
-    const label = document.getElementById('themeLabel');
+    const icon   = document.getElementById('themeIcon');
+    const label  = document.getElementById('themeLabel');
     const toggle = document.getElementById('themeToggle');
-    if (icon)  icon.textContent  = dark ? '🌙' : '☀️';
-    if (label) label.textContent = dark ? 'DARK' : 'LIGHT';
-    if (toggle) toggle.checked = !dark;
+    if (icon)   icon.textContent   = dark ? '🌙' : '☀️';
+    if (label)  label.textContent  = dark ? 'DARK' : 'LIGHT';
+    if (toggle) toggle.checked     = !dark;
   };
 
-  // ── Tab Switching ──────────────────────────────────────────────────────────
+  // ── Tabs ───────────────────────────────────────────────────────────────────
 
   const switchTab = (tab) => {
     _activeTab = tab;
@@ -115,9 +111,7 @@ const app = (() => {
                r.task.toLowerCase().includes(q);
       });
     }
-    if (_reminderFilter.status) {
-      data = data.filter(r => r.status === _reminderFilter.status);
-    }
+    if (_reminderFilter.status)  data = data.filter(r => r.status === _reminderFilter.status);
     if (_reminderFilter.vehicle) {
       data = data.filter(r => {
         const vehicles = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle];
@@ -141,36 +135,33 @@ const app = (() => {
     }
 
     data.forEach(r => {
-      const vehicles = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle || 'Unknown'];
-      const pct = Math.min(100, Math.round((r.current / r.target) * 100));
-      const over = r.current > r.target;
-      const nearWarn = !over && (r.target - r.current) <= r.warn;
+      const vehicles  = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle || 'Unknown'];
+      const conditions = r.conditions || [];
 
       const statusBadge =
-        r.status === 'overdue'  ? `<span class="badge badge-danger">Overdue</span>` :
-        r.status === 'due-soon' ? `<span class="badge badge-warn">Due Soon</span>` :
+        r.status === 'overdue'  ? `<span class="badge badge-danger">Overdue</span>`  :
+        r.status === 'due-soon' ? `<span class="badge badge-warn">Due Soon</span>`   :
                                   `<span class="badge badge-ok">Scheduled</span>`;
 
-      const typeBadge = `<span class="badge badge-gray">${r.type}</span>`;
-      const progColor = over ? 'var(--danger)' : nearWarn ? 'var(--warn)' : 'var(--accent3)';
+      // Build a compact condition summary
+      const condSummary = conditions.length
+        ? conditions.map(c => {
+            if (c.type === 'time')         return `📅 ${c.value} days`;
+            if (c.type === 'distance')     return `🛣 ${Number(c.value).toLocaleString()} mi`;
+            if (c.type === 'engineHours')  return `⏱ ${c.value} hrs`;
+            return '';
+          }).filter(Boolean).join(' · ')
+        : '—';
 
-      const triggerDisplay = r.type === 'Date'
-        ? `<div class="odo-chip"><span>📅</span> Due: ${r.date || 'N/A'}</div>`
-        : `<div class="progress-wrap">
-            <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${progColor}"></div></div>
-            <span class="progress-label">${r.current.toLocaleString()} / ${r.target.toLocaleString()} mi</span>
-          </div>`;
-
-      const prioClass = r.priority === 'High' ? 'priority-high' : r.priority === 'Medium' ? 'priority-medium' : 'priority-low';
-      const vehiclePillsHTML = _renderVehicleMiniPills(vehicles);
+      const prioClass  = r.priority === 'High' ? 'priority-high' : r.priority === 'Medium' ? 'priority-medium' : 'priority-low';
+      const pillsHTML  = _renderVehicleMiniPills(vehicles);
 
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td><div class="vehicles-cell">${vehiclePillsHTML}</div></td>
+        <td><div class="vehicles-cell">${pillsHTML}</div></td>
         <td style="font-weight:500">${r.task}</td>
-        <td>${typeBadge}</td>
+        <td style="font-size:11px;color:var(--text-muted);font-family:var(--mono)">${condSummary}</td>
         <td>${statusBadge}</td>
-        <td style="min-width:200px">${triggerDisplay}</td>
         <td><span class="${prioClass}" style="font-family:var(--mono);font-size:11px;font-weight:600">▲ ${r.priority}</span></td>
         <td>
           <div style="display:flex;gap:6px">
@@ -183,7 +174,6 @@ const app = (() => {
 
     _set('rowCount', data.length);
 
-    // Populate vehicle filter dropdown
     const sel = document.getElementById('vehicleFilter');
     if (sel && sel.options.length <= 1) {
       DataStore.getUniqueVehicles().forEach(v => {
@@ -195,14 +185,11 @@ const app = (() => {
   };
 
   const _renderVehicleMiniPills = (vehicles) => {
-    const MAX_SHOW = 3;
-    let html = '';
-    vehicles.slice(0, MAX_SHOW).forEach((v, i) => {
-      html += `<span class="vehicle-mini-pill${i === 0 ? ' primary' : ''}">🚛 ${v}</span>`;
-    });
-    if (vehicles.length > MAX_SHOW) {
-      html += `<span class="vehicle-mini-more">+${vehicles.length - MAX_SHOW} more</span>`;
-    }
+    const MAX = 3;
+    let html = vehicles.slice(0, MAX).map((v, i) =>
+      `<span class="vehicle-mini-pill${i === 0 ? ' primary' : ''}">🚛 ${v}</span>`
+    ).join('');
+    if (vehicles.length > MAX) html += `<span class="vehicle-mini-more">+${vehicles.length - MAX} more</span>`;
     return html;
   };
 
@@ -219,9 +206,7 @@ const app = (() => {
         w.task.toLowerCase().includes(q)
       );
     }
-    if (_woFilter.status) {
-      data = data.filter(w => w.status === _woFilter.status);
-    }
+    if (_woFilter.status) data = data.filter(w => w.status === _woFilter.status);
 
     const tbody = document.getElementById('woBody');
     if (!tbody) return;
@@ -239,7 +224,7 @@ const app = (() => {
 
     data.forEach(wo => {
       const statusBadge =
-        wo.status === 'Open'        ? `<span class="badge badge-info">Open</span>` :
+        wo.status === 'Open'        ? `<span class="badge badge-info">Open</span>`        :
         wo.status === 'In Progress' ? `<span class="badge badge-warn">In Progress</span>` :
                                       `<span class="badge badge-ok">Completed</span>`;
 
@@ -275,11 +260,11 @@ const app = (() => {
 
   // ── Filters ────────────────────────────────────────────────────────────────
 
-  const filterReminders = (q) => { _reminderFilter.query = q; _renderReminders(); };
-  const filterRemindersByStatus = (s) => { _reminderFilter.status = s; _renderReminders(); };
+  const filterReminders          = (q) => { _reminderFilter.query   = q; _renderReminders(); };
+  const filterRemindersByStatus  = (s) => { _reminderFilter.status  = s; _renderReminders(); };
   const filterRemindersByVehicle = (v) => { _reminderFilter.vehicle = v; _renderReminders(); };
-  const filterWorkOrders = (q) => { _woFilter.query = q; _renderWorkOrders(); };
-  const filterWOByStatus = (s) => { _woFilter.status = s; _renderWorkOrders(); };
+  const filterWorkOrders         = (q) => { _woFilter.query         = q; _renderWorkOrders(); };
+  const filterWOByStatus         = (s) => { _woFilter.status        = s; _renderWorkOrders(); };
 
   // ── Notifications ──────────────────────────────────────────────────────────
 
@@ -289,10 +274,10 @@ const app = (() => {
     document.getElementById('notifTitle').textContent =
       `Maintenance Reminder Triggered — ${vehicles.join(', ')}`;
     document.getElementById('notifDesc').textContent =
-      `${reminder.task} due — Odometer ${reminder.current.toLocaleString()} mi has reached trigger of ${reminder.target.toLocaleString()} mi` +
-      (milesOver > 0 ? ` (+${milesOver.toLocaleString()} mi over)` : '');
-    const dot = document.getElementById('notifDot');
+      `${reminder.task} is due` +
+      (milesOver > 0 ? ` — ${milesOver.toLocaleString()} mi over trigger` : '');
     document.getElementById('notifBanner').style.display = 'flex';
+    const dot = document.getElementById('notifDot');
     if (dot) dot.style.display = 'none';
   };
 
@@ -324,10 +309,6 @@ const app = (() => {
           <span class="accept-preview-value">${r.task}</span>
         </div>
         <div class="accept-preview-row">
-          <span class="accept-preview-label">Triggered At</span>
-          <span class="accept-preview-value" style="color:var(--danger)">${r.current.toLocaleString()} mi${over > 0 ? ' (+' + over.toLocaleString() + ' over)' : ''}</span>
-        </div>
-        <div class="accept-preview-row">
           <span class="accept-preview-label">Priority</span>
           <span class="accept-preview-value" style="color:var(--danger)">${r.priority}</span>
         </div>
@@ -357,7 +338,7 @@ const app = (() => {
 
   const acceptAndCreateWO = () => {
     if (!_pendingNotifReminder) return;
-    const r = _pendingNotifReminder;
+    const r        = _pendingNotifReminder;
     const vehicles = Array.isArray(r.vehicles) ? r.vehicles : [r.vehicle];
     const assignee = document.getElementById('accept-assignee')?.value || 'Unassigned';
     const date     = document.getElementById('accept-date')?.value    || new Date().toISOString().split('T')[0];
@@ -368,7 +349,8 @@ const app = (() => {
       return DataStore.addWorkOrder({
         vehicle: vehicleId, make: info ? info.make : '',
         task: r.task, status: 'Open', assignee,
-        odo: r.current.toLocaleString(), cost: null, date,
+        odo: r.current ? r.current.toLocaleString() : '0',
+        cost: null, date,
         notes: notes || `Auto-created from reminder ${r.id}`,
         parts: '', labor: '', reminderId: r.id,
       });
@@ -378,104 +360,57 @@ const app = (() => {
     _pendingNotifReminder = null;
     refreshAll();
     switchTab('workorders');
-    const msg = created.length === 1
+    _showToast(created.length === 1
       ? `✓ Work Order ${created[0].id} created`
-      : `✓ ${created.length} Work Orders created`;
-    _showToast(msg);
-  };
-
-  // ── Multi-Vehicle Picker ───────────────────────────────────────────────────
-
-  const _buildVehiclePickerHTML = (selectedVehicles = []) => {
-    _pickerSelected = [...selectedVehicles];
-    return `
-      <div class="vehicle-picker" id="vehiclePicker">
-        <div class="vehicle-pills" id="vehiclePills">${_buildPillsHTML()}</div>
-        <input class="vehicle-picker-search" id="vehiclePickerSearch"
-          placeholder="Search vehicles..." oninput="app._filterPickerList(this.value)">
-        <div class="vehicle-picker-list" id="vehiclePickerList">
-          ${_buildPickerListHTML('')}
-        </div>
-      </div>`;
-  };
-
-  const _buildPillsHTML = () => {
-    if (_pickerSelected.length === 0)
-      return `<span class="vehicle-pills-empty">No vehicles selected — choose below</span>`;
-    return _pickerSelected.map(id =>
-      `<span class="vehicle-pill">🚛 ${id}
-        <span class="vehicle-pill-remove" onclick="app._removeVehicleFromPicker('${id}')">×</span>
-      </span>`
-    ).join('');
-  };
-
-  const _buildPickerListHTML = (query) => {
-    const q = query.toLowerCase();
-    const filtered = KNOWN_VEHICLES.filter(v =>
-      !q || v.id.toLowerCase().includes(q) || v.make.toLowerCase().includes(q)
-    );
-    if (!filtered.length)
-      return `<div style="padding:16px;text-align:center;color:var(--text-dim);font-size:12px">No vehicles match</div>`;
-    return filtered.map(v => {
-      const checked = _pickerSelected.includes(v.id);
-      return `<div class="vehicle-picker-item${checked ? ' checked' : ''}" onclick="app._toggleVehicleInPicker('${v.id}')">
-        <div class="vehicle-checkbox">${checked ? '✓' : ''}</div>
-        <span class="vehicle-picker-name">${v.id}</span>
-        <span class="vehicle-picker-make">${v.make}</span>
-      </div>`;
-    }).join('');
-  };
-
-  const _toggleVehicleInPicker = (id) => {
-    const idx = _pickerSelected.indexOf(id);
-    idx === -1 ? _pickerSelected.push(id) : _pickerSelected.splice(idx, 1);
-    _refreshPickerUI();
-  };
-
-  const _removeVehicleFromPicker = (id) => {
-    _pickerSelected = _pickerSelected.filter(v => v !== id);
-    _refreshPickerUI();
-  };
-
-  const _filterPickerList = (query) => {
-    const list = document.getElementById('vehiclePickerList');
-    if (list) list.innerHTML = _buildPickerListHTML(query);
-  };
-
-  const _refreshPickerUI = () => {
-    const pills = document.getElementById('vehiclePills');
-    if (pills) pills.innerHTML = _buildPillsHTML();
-    const search = document.getElementById('vehiclePickerSearch');
-    const list = document.getElementById('vehiclePickerList');
-    if (list) list.innerHTML = _buildPickerListHTML(search ? search.value : '');
+      : `✓ ${created.length} Work Orders created`);
   };
 
   // ── Reminder Modal ─────────────────────────────────────────────────────────
 
-  const openReminderModal = (reminderId) => {
+  const openReminderModal = async (reminderId) => {
     _editingReminderId = reminderId || null;
     const existing = reminderId ? DataStore.getReminder(reminderId) : null;
+
+    // Reset asset state
+    _selectedAssets = new Set(
+      existing
+        ? (Array.isArray(existing.vehicles) ? existing.vehicles : [existing.vehicle].filter(Boolean))
+        : []
+    );
 
     document.getElementById('reminderModalTitle').textContent =
       existing ? `✏️ Edit Reminder — ${existing.task}` : '＋ New Maintenance Reminder';
 
-    const existingVehicles = existing
-      ? (Array.isArray(existing.vehicles) ? existing.vehicles : [existing.vehicle].filter(Boolean))
-      : [];
-
-    document.getElementById('reminderModalBody').innerHTML =
-      _getReminderFormHTML(existing, existingVehicles);
+    // Render the modal shell with a loading state for the assets table
+    document.getElementById('reminderModalBody').innerHTML = _getReminderFormHTML(existing);
     document.getElementById('reminderModal').style.display = 'flex';
+
+    // Load asset data from Geotab async, then populate the table
+    _renderAssetTableLoading();
+    try {
+      _allAssets      = await GeotabIntegration.getVehicleAssetData();
+      _filteredAssets = [..._allAssets];
+      _renderAssetTable();
+    } catch (err) {
+      console.error('Could not load asset data:', err);
+      // Fall back to plain vehicle list from KNOWN_VEHICLES
+      _allAssets      = KNOWN_VEHICLES.map(v => ({ name: v.id, id: v.id, make: v.make, lastOdometer: null, lastEngineHours: null, lastMaintenanceDate: null }));
+      _filteredAssets = [..._allAssets];
+      _renderAssetTable();
+    }
   };
 
-  const _getReminderFormHTML = (r, existingVehicles = []) => `
-    <div class="form-section-label">Vehicles &amp; Task</div>
+  // ── Reminder Form HTML ─────────────────────────────────────────────────────
 
-    <div class="form-group full" style="margin-bottom:16px">
-      <label>Assign to Vehicles <span style="color:var(--text-dim);font-weight:400;text-transform:none;font-size:10px;letter-spacing:0">(select one or more)</span></label>
-      ${_buildVehiclePickerHTML(existingVehicles)}
-    </div>
+  const _getReminderFormHTML = (r) => {
+    const existingConditions = r && r.conditions ? r.conditions : [];
+    const hasTime  = existingConditions.find(c => c.type === 'time');
+    const hasDist  = existingConditions.find(c => c.type === 'distance');
+    const hasHours = existingConditions.find(c => c.type === 'engineHours');
 
+    return `
+    <!-- ── Task & Priority ── -->
+    <div class="form-section-label">Task &amp; Details</div>
     <div class="form-grid">
       <div class="form-group">
         <label>Maintenance Task</label>
@@ -493,80 +428,233 @@ const app = (() => {
       <div class="form-group">
         <label>Priority</label>
         <select id="r-priority">
-          <option${r && r.priority === 'High' ? ' selected' : ''}>High</option>
+          <option${r && r.priority === 'High'   ? ' selected' : ''}>High</option>
           <option${!r || r.priority === 'Medium' ? ' selected' : ''}>Medium</option>
-          <option${r && r.priority === 'Low' ? ' selected' : ''}>Low</option>
+          <option${r && r.priority === 'Low'    ? ' selected' : ''}>Low</option>
         </select>
       </div>
       <div class="form-group">
         <label>Assigned To</label>
         <input type="text" id="r-assignee" placeholder="Technician or shop" value="${r ? r.assignee || '' : ''}">
       </div>
-    </div>
-
-    <div class="form-section-label" style="margin-top:16px">Trigger Condition</div>
-    <div class="trigger-options" id="triggerOptions">
-      <div class="trigger-option${!r || r.type === 'Odometer' ? ' selected' : ''}" onclick="app._selectTrigger(this,'Odometer')">
-        <div class="trigger-option-title">🛣 Odometer</div>
-        <div class="trigger-option-desc">Trigger at a specific mileage reading</div>
-      </div>
-      <div class="trigger-option${r && r.type === 'Interval' ? ' selected' : ''}" onclick="app._selectTrigger(this,'Interval')">
-        <div class="trigger-option-title">🔁 Mileage Interval</div>
-        <div class="trigger-option-desc">Repeat every X miles from last service</div>
-      </div>
-      <div class="trigger-option${r && r.type === 'Date' ? ' selected' : ''}" onclick="app._selectTrigger(this,'Date')">
-        <div class="trigger-option-title">📅 Date</div>
-        <div class="trigger-option-desc">Trigger on a specific calendar date</div>
-      </div>
-      <div class="trigger-option${r && r.type === 'Engine Hours' ? ' selected' : ''}" onclick="app._selectTrigger(this,'Engine Hours')">
-        <div class="trigger-option-title">⏱ Engine Hours</div>
-        <div class="trigger-option-desc">Trigger after N engine hours</div>
+      <div class="form-group full">
+        <label>Notes / Description</label>
+        <textarea id="r-notes" placeholder="Additional instructions...">${r ? r.notes || '' : ''}</textarea>
       </div>
     </div>
 
-    <div id="triggerFields" style="margin-top:14px">
-      ${_getTriggerFieldsHTML(r ? r.type : 'Odometer', r)}
+    <!-- ── Conditions ── -->
+    <div class="form-section-label" style="margin-top:20px">Conditions
+      <span style="font-weight:400;font-size:10px;color:var(--text-dim);text-transform:none;letter-spacing:0;margin-left:6px">Select one or more trigger conditions</span>
+    </div>
+    <div class="conditions-wrap">
+
+      <!-- Time -->
+      <div class="condition-block" id="cond-time-block">
+        <label class="condition-toggle">
+          <input type="checkbox" id="cond-time-check" onchange="app._toggleCondition('time')"
+            ${hasTime ? 'checked' : ''}>
+          <span class="condition-label">📅 Repeats by time</span>
+        </label>
+        <div class="condition-fields" id="cond-time-fields" style="display:${hasTime ? 'flex' : 'none'}">
+          <div class="form-group">
+            <label>Every (days)</label>
+            <input type="number" id="cond-time-value" placeholder="e.g. 90" value="${hasTime ? hasTime.value : ''}">
+          </div>
+          <div class="form-group">
+            <label>Warn (days before)</label>
+            <input type="number" id="cond-time-warn" placeholder="e.g. 7" value="${hasTime ? hasTime.warn || '' : ''}">
+          </div>
+        </div>
+      </div>
+
+      <!-- Distance -->
+      <div class="condition-block" id="cond-distance-block">
+        <label class="condition-toggle">
+          <input type="checkbox" id="cond-distance-check" onchange="app._toggleCondition('distance')"
+            ${hasDist ? 'checked' : ''}>
+          <span class="condition-label">🛣 Repeats by distance</span>
+        </label>
+        <div class="condition-fields" id="cond-distance-fields" style="display:${hasDist ? 'flex' : 'none'}">
+          <div class="form-group">
+            <label>Every (miles)</label>
+            <input type="number" id="cond-distance-value" placeholder="e.g. 5000" value="${hasDist ? hasDist.value : ''}">
+          </div>
+          <div class="form-group">
+            <label>Warn (miles before)</label>
+            <input type="number" id="cond-distance-warn" placeholder="e.g. 500" value="${hasDist ? hasDist.warn || '' : ''}">
+          </div>
+        </div>
+      </div>
+
+      <!-- Engine Hours -->
+      <div class="condition-block" id="cond-hours-block">
+        <label class="condition-toggle">
+          <input type="checkbox" id="cond-hours-check" onchange="app._toggleCondition('engineHours')"
+            ${hasHours ? 'checked' : ''}>
+          <span class="condition-label">⏱ Repeats by engine hours</span>
+        </label>
+        <div class="condition-fields" id="cond-hours-fields" style="display:${hasHours ? 'flex' : 'none'}">
+          <div class="form-group">
+            <label>Every (hours)</label>
+            <input type="number" id="cond-hours-value" placeholder="e.g. 250" value="${hasHours ? hasHours.value : ''}">
+          </div>
+          <div class="form-group">
+            <label>Warn (hours before)</label>
+            <input type="number" id="cond-hours-warn" placeholder="e.g. 10" value="${hasHours ? hasHours.warn || '' : ''}">
+          </div>
+        </div>
+      </div>
+
     </div>
 
-    <div class="form-group full" style="margin-top:12px">
-      <label>Notes / Description</label>
-      <textarea id="r-notes" placeholder="Additional instructions...">${r ? r.notes || '' : ''}</textarea>
+    <!-- ── Assets ── -->
+    <div class="form-section-label" style="margin-top:20px">Assets
+      <span style="font-weight:400;font-size:10px;color:var(--text-dim);text-transform:none;letter-spacing:0;margin-left:6px">Select vehicles to apply this reminder to</span>
+    </div>
+    <div class="asset-picker-wrap">
+      <div class="asset-picker-toolbar">
+        <input class="search-input" id="assetSearch" placeholder="Search assets..."
+          oninput="app._filterAssets(this.value)" style="max-width:260px">
+        <button class="btn btn-ghost btn-sm" onclick="app._selectAllAssets()" id="assetSelectAllBtn">Select All</button>
+        <span id="assetSelectedCount" style="font-family:var(--mono);font-size:11px;color:var(--text-muted);margin-left:auto">
+          0 selected
+        </span>
+      </div>
+      <div id="assetTableWrap">
+        <!-- Populated async by openReminderModal -->
+      </div>
     </div>`;
-
-  const _getTriggerFieldsHTML = (type, r) => {
-    const fg = (label, id, value, placeholder, inputType = 'number') =>
-      `<div class="form-group"><label>${label}</label><input type="${inputType}" id="${id}" placeholder="${placeholder}" value="${value || ''}"></div>`;
-
-    if (type === 'Odometer') return `<div class="form-grid">
-      ${fg('Target Odometer (mi)', 'r-target', r ? r.target : '', 'e.g. 90000')}
-      ${fg('Warning Threshold (mi before)', 'r-warn', r ? r.warn : '', 'e.g. 500')}
-      ${fg('Current Odometer (mi)', 'r-current', r ? r.current : '', 'Live from Geotab')}
-    </div>`;
-
-    if (type === 'Interval') return `<div class="form-grid">
-      ${fg('Repeat Every (mi)', 'r-target', r ? r.target : '', 'e.g. 5000')}
-      ${fg('Last Service Odometer (mi)', 'r-current', r ? r.current : '', 'e.g. 80000')}
-      ${fg('Warning (mi before)', 'r-warn', r ? r.warn : '', 'e.g. 500')}
-    </div>`;
-
-    if (type === 'Date') return `<div class="form-grid">
-      ${fg('Trigger Date', 'r-date', r ? r.date : '', '', 'date')}
-      ${fg('Warn X Days Before', 'r-warn', r ? r.warn : '', 'e.g. 7')}
-    </div>`;
-
-    if (type === 'Engine Hours') return `<div class="form-grid">
-      ${fg('Target Engine Hours', 'r-target', r ? r.target : '', 'e.g. 250')}
-      ${fg('Warning (hours before)', 'r-warn', r ? r.warn : '', 'e.g. 10')}
-    </div>`;
-
-    return '';
   };
 
-  const _selectTrigger = (el, type) => {
-    document.querySelectorAll('.trigger-option').forEach(o => o.classList.remove('selected'));
-    el.classList.add('selected');
-    const fields = document.getElementById('triggerFields');
-    if (fields) fields.innerHTML = _getTriggerFieldsHTML(type, null);
+  // ── Asset Table Rendering ──────────────────────────────────────────────────
+
+  const _renderAssetTableLoading = () => {
+    const wrap = document.getElementById('assetTableWrap');
+    if (!wrap) return;
+    wrap.innerHTML = `
+      <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px">
+        <span class="spinner-border spinner-border-sm" style="width:14px;height:14px;border-width:2px;display:inline-block;border-radius:50%;border:2px solid var(--text-dim);border-top-color:var(--accent2);animation:spin 0.7s linear infinite;margin-right:8px"></span>
+        Loading vehicles from Geotab...
+      </div>`;
+  };
+
+  const _renderAssetTable = () => {
+    const wrap = document.getElementById('assetTableWrap');
+    if (!wrap) return;
+
+    _updateAssetSelectedCount();
+
+    if (_filteredAssets.length === 0) {
+      wrap.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px">No vehicles found</div>`;
+      return;
+    }
+
+    const allFilteredSelected = _filteredAssets.length > 0 &&
+      _filteredAssets.every(a => _selectedAssets.has(a.name));
+
+    wrap.innerHTML = `
+      <table class="asset-table">
+        <thead>
+          <tr>
+            <th style="width:36px">
+              <input type="checkbox" id="assetCheckAll"
+                ${allFilteredSelected ? 'checked' : ''}
+                onchange="app._toggleAllFiltered(this.checked)">
+            </th>
+            <th>Asset</th>
+            <th>Last Maintenance</th>
+            <th>Last Odometer</th>
+            <th>Last Engine Hours</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${_filteredAssets.map(a => `
+            <tr class="asset-row${_selectedAssets.has(a.name) ? ' selected' : ''}"
+                onclick="app._toggleAsset('${a.name}')">
+              <td onclick="event.stopPropagation()">
+                <input type="checkbox" ${_selectedAssets.has(a.name) ? 'checked' : ''}
+                  onchange="app._toggleAsset('${a.name}')">
+              </td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div class="vehicle-avatar" style="width:28px;height:28px;font-size:13px">🚛</div>
+                  <div>
+                    <div style="font-weight:500;font-size:12px">${a.name}</div>
+                    ${a.make ? `<div style="font-size:11px;color:var(--text-muted)">${a.make}</div>` : ''}
+                  </div>
+                </div>
+              </td>
+              <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">
+                ${a.lastMaintenanceDate || '—'}
+              </td>
+              <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">
+                ${a.lastOdometer != null ? a.lastOdometer.toLocaleString() + ' mi' : '—'}
+              </td>
+              <td style="font-family:var(--mono);font-size:11px;color:var(--text-muted)">
+                ${a.lastEngineHours != null ? a.lastEngineHours.toLocaleString() + ' hrs' : '—'}
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  };
+
+  const _updateAssetSelectedCount = () => {
+    const el = document.getElementById('assetSelectedCount');
+    if (el) el.textContent = `${_selectedAssets.size} selected`;
+  };
+
+  const _toggleAsset = (name) => {
+    if (_selectedAssets.has(name)) {
+      _selectedAssets.delete(name);
+    } else {
+      _selectedAssets.add(name);
+    }
+    _renderAssetTable();
+  };
+
+  const _toggleAllFiltered = (checked) => {
+    _filteredAssets.forEach(a => {
+      if (checked) {
+        _selectedAssets.add(a.name);
+      } else {
+        _selectedAssets.delete(a.name);
+      }
+    });
+    _renderAssetTable();
+  };
+
+  const _selectAllAssets = () => {
+    const allSelected = _filteredAssets.every(a => _selectedAssets.has(a.name));
+    _filteredAssets.forEach(a => {
+      if (allSelected) {
+        _selectedAssets.delete(a.name);
+      } else {
+        _selectedAssets.add(a.name);
+      }
+    });
+    _renderAssetTable();
+  };
+
+  const _filterAssets = (query) => {
+    const q = query.toLowerCase();
+    _filteredAssets = q
+      ? _allAssets.filter(a =>
+          a.name.toLowerCase().includes(q) ||
+          (a.make || '').toLowerCase().includes(q)
+        )
+      : [..._allAssets];
+    _renderAssetTable();
+  };
+
+  // ── Condition Toggle ───────────────────────────────────────────────────────
+
+  const _toggleCondition = (type) => {
+    const fieldMap = { time: 'cond-time-fields', distance: 'cond-distance-fields', engineHours: 'cond-hours-fields' };
+    const checkMap = { time: 'cond-time-check',  distance: 'cond-distance-check',  engineHours: 'cond-hours-check'  };
+    const checked  = document.getElementById(checkMap[type])?.checked;
+    const fields   = document.getElementById(fieldMap[type]);
+    if (fields) fields.style.display = checked ? 'flex' : 'none';
   };
 
   const _taskSelectChanged = (val) => {
@@ -574,41 +662,75 @@ const app = (() => {
     if (grp) grp.style.display = val === 'Custom Issue / Repair' ? 'flex' : 'none';
   };
 
+  // ── Save Reminder ──────────────────────────────────────────────────────────
+
   const saveReminder = () => {
-    if (_pickerSelected.length === 0) {
+    if (_selectedAssets.size === 0) {
       _showToast('Please select at least one vehicle', true); return;
     }
 
-    const taskSel  = document.getElementById('r-task-select')?.value;
-    const customT  = document.getElementById('r-custom-task')?.value?.trim();
-    const task     = taskSel === 'Custom Issue / Repair' ? (customT || 'Custom Task') : taskSel;
-    const priority = document.getElementById('r-priority')?.value || 'Medium';
-    const assignee = document.getElementById('r-assignee')?.value?.trim();
-    const notes    = document.getElementById('r-notes')?.value?.trim();
-    const target   = parseInt(document.getElementById('r-target')?.value) || 0;
-    const warn     = parseInt(document.getElementById('r-warn')?.value) || 500;
-    const current  = parseInt(document.getElementById('r-current')?.value) || 0;
-    const date     = document.getElementById('r-date')?.value;
+    // Collect conditions
+    const conditions = [];
 
-    const selectedTriggerEl = document.querySelector('.trigger-option.selected .trigger-option-title');
-    const typeText = selectedTriggerEl ? selectedTriggerEl.textContent.trim() : '🛣 Odometer';
-    const typeMap = { 'Odometer': 'Odometer', 'Interval': 'Interval', 'Date': 'Date', 'Hours': 'Engine Hours' };
-    const triggerType = Object.keys(typeMap).find(k => typeText.includes(k))
-      ? typeMap[Object.keys(typeMap).find(k => typeText.includes(k))] : 'Odometer';
+    if (document.getElementById('cond-time-check')?.checked) {
+      const val  = parseInt(document.getElementById('cond-time-value')?.value);
+      const warn = parseInt(document.getElementById('cond-time-warn')?.value)  || 0;
+      if (!val) { _showToast('Please enter a value for the Time condition', true); return; }
+      conditions.push({ type: 'time', value: val, warn });
+    }
 
+    if (document.getElementById('cond-distance-check')?.checked) {
+      const val  = parseInt(document.getElementById('cond-distance-value')?.value);
+      const warn = parseInt(document.getElementById('cond-distance-warn')?.value) || 0;
+      if (!val) { _showToast('Please enter a value for the Distance condition', true); return; }
+      conditions.push({ type: 'distance', value: val, warn });
+    }
+
+    if (document.getElementById('cond-hours-check')?.checked) {
+      const val  = parseInt(document.getElementById('cond-hours-value')?.value);
+      const warn = parseInt(document.getElementById('cond-hours-warn')?.value)  || 0;
+      if (!val) { _showToast('Please enter a value for the Engine Hours condition', true); return; }
+      conditions.push({ type: 'engineHours', value: val, warn });
+    }
+
+    if (conditions.length === 0) {
+      _showToast('Please select at least one condition', true); return;
+    }
+
+    const taskSel = document.getElementById('r-task-select')?.value;
+    const customT = document.getElementById('r-custom-task')?.value?.trim();
+    const task    = taskSel === 'Custom Issue / Repair' ? (customT || 'Custom Task') : taskSel;
     if (!task) { _showToast('Please select a task', true); return; }
 
+    const vehicles = [..._selectedAssets];
+
+    // Determine overall status from distance condition if present
+    const distCond = conditions.find(c => c.type === 'distance');
     let status = 'scheduled';
-    if (triggerType !== 'Date') {
-      if (current >= target) status = 'overdue';
-      else if (target - current <= warn) status = 'due-soon';
+    if (distCond) {
+      // Get current odometer of first vehicle as proxy
+      const firstAsset = _allAssets.find(a => a.name === vehicles[0]);
+      if (firstAsset && firstAsset.lastOdometer != null) {
+        if (firstAsset.lastOdometer >= distCond.value) status = 'overdue';
+        else if (distCond.value - firstAsset.lastOdometer <= distCond.warn) status = 'due-soon';
+      }
     }
 
     const data = {
-      vehicles:  [..._pickerSelected],
-      vehicle:   _pickerSelected[0],
-      make:      KNOWN_VEHICLES.find(v => v.id === _pickerSelected[0])?.make || '',
-      task, type: triggerType, priority, assignee, notes, target, warn, current, status, date,
+      vehicles,
+      vehicle:  vehicles[0],
+      make:     KNOWN_VEHICLES.find(v => v.id === vehicles[0])?.make || '',
+      task,
+      conditions,
+      // Legacy fields for backward compat with odometer polling
+      type:     distCond ? 'Interval' : conditions[0]?.type === 'time' ? 'Date' : 'Engine Hours',
+      target:   distCond ? distCond.value : 0,
+      warn:     distCond ? distCond.warn  : 0,
+      current:  _allAssets.find(a => a.name === vehicles[0])?.lastOdometer || 0,
+      status,
+      priority: document.getElementById('r-priority')?.value || 'Medium',
+      assignee: document.getElementById('r-assignee')?.value?.trim() || '',
+      notes:    document.getElementById('r-notes')?.value?.trim()    || '',
     };
 
     if (_editingReminderId) {
@@ -640,15 +762,15 @@ const app = (() => {
 
     if (!woId) {
       title.textContent = '＋ New Work Order';
-      body.innerHTML = _getWOFormHTML();
-      footer.innerHTML = `
+      body.innerHTML    = _getWOFormHTML();
+      footer.innerHTML  = `
         <button class="btn btn-ghost" onclick="app.closeModal('woModal')">Cancel</button>
         <button class="btn btn-primary" onclick="app._saveNewWO()">Create Work Order</button>`;
     } else {
       const wo = DataStore.getWorkOrder(woId);
       if (!wo) return;
-      title.innerHTML = `<span style="color:var(--accent2);margin-right:8px">${wo.id}</span>${wo.task}`;
-      body.innerHTML = _getWODetailHTML(wo);
+      title.innerHTML  = `<span style="color:var(--accent2);margin-right:8px">${wo.id}</span>${wo.task}`;
+      body.innerHTML   = _getWODetailHTML(wo);
       footer.innerHTML = `
         <button class="btn btn-ghost" onclick="app.closeModal('woModal')">Close</button>
         ${wo.status !== 'Completed'
@@ -675,7 +797,7 @@ const app = (() => {
 
   const _getWODetailHTML = (wo) => {
     const statusBadge =
-      wo.status === 'Open'        ? `<span class="badge badge-info">Open</span>` :
+      wo.status === 'Open'        ? `<span class="badge badge-info">Open</span>`        :
       wo.status === 'In Progress' ? `<span class="badge badge-warn">In Progress</span>` :
                                     `<span class="badge badge-ok">Completed</span>`;
     return `
@@ -717,12 +839,12 @@ const app = (() => {
       vehicle, make: document.getElementById('wo-make')?.value?.trim() || '',
       task, status: 'Open',
       assignee: document.getElementById('wo-assignee')?.value?.trim() || 'Unassigned',
-      odo: document.getElementById('wo-odo')?.value || '0',
-      cost: parseFloat(document.getElementById('wo-cost')?.value) || null,
+      odo:  document.getElementById('wo-odo')?.value  || '0',
+      cost: parseFloat(document.getElementById('wo-cost')?.value)  || null,
       date: document.getElementById('wo-date')?.value || new Date().toISOString().split('T')[0],
-      notes: document.getElementById('wo-notes')?.value?.trim() || '',
-      parts: document.getElementById('wo-parts')?.value?.trim() || '',
-      labor: document.getElementById('wo-labor')?.value?.trim() || '',
+      notes: document.getElementById('wo-notes')?.value?.trim()  || '',
+      parts: document.getElementById('wo-parts')?.value?.trim()  || '',
+      labor: document.getElementById('wo-labor')?.value?.trim()  || '',
       reminderId: null,
     });
 
@@ -733,11 +855,11 @@ const app = (() => {
 
   const _saveWOEdits = (woId) => {
     DataStore.updateWorkOrder(woId, {
-      assignee:       document.getElementById('wo-assignee')?.value || '',
-      odo:            document.getElementById('wo-odo')?.value || '',
-      notes:          document.getElementById('wo-notes')?.value || '',
-      parts:          document.getElementById('wo-parts')?.value || '',
-      labor:          document.getElementById('wo-labor')?.value || '',
+      assignee:       document.getElementById('wo-assignee')?.value       || '',
+      odo:            document.getElementById('wo-odo')?.value            || '',
+      notes:          document.getElementById('wo-notes')?.value          || '',
+      parts:          document.getElementById('wo-parts')?.value          || '',
+      labor:          document.getElementById('wo-labor')?.value          || '',
       cost:           parseFloat(document.getElementById('wo-cost')?.value) || null,
       completionDate: document.getElementById('wo-completion-date')?.value || '',
     });
@@ -749,11 +871,11 @@ const app = (() => {
   const _saveAndCompleteWO = (woId) => {
     DataStore.updateWorkOrder(woId, {
       status: 'Completed',
-      assignee:       document.getElementById('wo-assignee')?.value || '',
-      odo:            document.getElementById('wo-odo')?.value || '',
-      notes:          document.getElementById('wo-notes')?.value || '',
-      parts:          document.getElementById('wo-parts')?.value || '',
-      labor:          document.getElementById('wo-labor')?.value || '',
+      assignee:       document.getElementById('wo-assignee')?.value       || '',
+      odo:            document.getElementById('wo-odo')?.value            || '',
+      notes:          document.getElementById('wo-notes')?.value          || '',
+      parts:          document.getElementById('wo-parts')?.value          || '',
+      labor:          document.getElementById('wo-labor')?.value          || '',
       cost:           parseFloat(document.getElementById('wo-cost')?.value) || null,
       completionDate: document.getElementById('wo-completion-date')?.value || new Date().toISOString().split('T')[0],
     });
@@ -783,7 +905,7 @@ const app = (() => {
 
   const _showToast = (msg, error = false) => {
     const el = document.createElement('div');
-    el.className = 'toast' + (error ? ' error' : '');
+    el.className  = 'toast' + (error ? ' error' : '');
     el.textContent = msg;
     document.body.appendChild(el);
     setTimeout(() => el.remove(), 3500);
@@ -803,12 +925,13 @@ const app = (() => {
     setVehicles,
     filterReminders, filterRemindersByStatus, filterRemindersByVehicle,
     openReminderModal, saveReminder, deleteReminder,
-    _selectTrigger, _taskSelectChanged,
-    _toggleVehicleInPicker, _removeVehicleFromPicker, _filterPickerList,
+    _taskSelectChanged, _toggleCondition,
+    _toggleAsset, _toggleAllFiltered, _selectAllAssets, _filterAssets,
     showNotification, dismissNotif, openAcceptModal, acceptAndCreateWO,
     filterWorkOrders, filterWOByStatus,
     openWOModal, _saveNewWO, _saveWOEdits, _saveAndCompleteWO, _updateWO,
     closeModal, closeModalOnOverlay,
   };
 
+})();
 })();
