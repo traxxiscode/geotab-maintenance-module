@@ -6,6 +6,32 @@
   <title>Fleet Maintenance Module</title>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
+
+  <style>
+    /* ── Conditions ── */
+    .conditions-wrap { display:flex; flex-direction:column; gap:10px; }
+    .condition-block { background:var(--card-bg,rgba(255,255,255,0.04)); border:1px solid var(--border,rgba(255,255,255,0.08)); border-radius:8px; padding:12px 14px; }
+    .condition-toggle { display:flex; align-items:center; gap:10px; cursor:pointer; font-size:13px; font-weight:500; user-select:none; }
+    .condition-toggle input[type=checkbox] { width:15px; height:15px; cursor:pointer; accent-color:var(--accent2,#79c0ff); }
+    .condition-label { color:var(--text,#e6edf3); }
+    .condition-fields { display:flex; gap:12px; margin-top:12px; flex-wrap:wrap; }
+    .condition-fields .form-group { flex:1; min-width:140px; margin:0; }
+
+    /* ── Asset picker ── */
+    .asset-picker-wrap { border:1px solid var(--border,rgba(255,255,255,0.08)); border-radius:8px; overflow:hidden; }
+    .asset-picker-toolbar { display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--card-bg,rgba(255,255,255,0.04)); border-bottom:1px solid var(--border,rgba(255,255,255,0.08)); flex-wrap:wrap; }
+    .asset-table { width:100%; border-collapse:collapse; font-size:12px; }
+    .asset-table thead tr { background:var(--card-bg,rgba(255,255,255,0.04)); }
+    .asset-table th { padding:8px 12px; text-align:left; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted,#8b949e); border-bottom:1px solid var(--border,rgba(255,255,255,0.08)); }
+    .asset-table td { padding:8px 12px; border-bottom:1px solid var(--border,rgba(255,255,255,0.06)); vertical-align:middle; }
+    .asset-row { cursor:pointer; transition:background .15s; }
+    .asset-row:hover { background:rgba(255,255,255,0.04); }
+    .asset-row.selected { background:rgba(121,192,255,0.07); }
+    .asset-row:last-child td { border-bottom:none; }
+
+    /* ── Spinner keyframes ── */
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
 </head>
 <body>
 
@@ -120,9 +146,8 @@
             <tr>
               <th>Vehicle</th>
               <th>Task</th>
-              <th>Type</th>
+              <th>Conditions</th>
               <th>Status</th>
-              <th>Trigger / Progress</th>
               <th>Priority</th>
               <th>Actions</th>
             </tr>
