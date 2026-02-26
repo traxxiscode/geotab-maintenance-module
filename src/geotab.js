@@ -5,7 +5,7 @@
 
 // ── Geotab Add-in Namespace ──────────────────────────────────────────────────
 
-geotab.addin.fleetMaintenance = function () {
+geotab.addin.fleetMaintenanceModule = function () {
   'use strict';
 
   let _api     = null;
