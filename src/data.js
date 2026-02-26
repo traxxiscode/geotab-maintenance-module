@@ -114,74 +114,12 @@ const DataStore = (() => {
   // ── Default seed data ───────────────────────────────────────────────────────
 
   const _loadDefaults = () => {
-    _reminders = [
-      {
-        id: 'R001',
-        vehicles: ['TRK-041'],
-        vehicle: 'TRK-041',
-        make: '2022 Ford F-250',
-        task: 'Oil Change',
-        type: 'Odometer',
-        status: 'overdue',
-        current: 84312,
-        target: 84000,
-        warn: 500,
-        priority: 'High',
-        notes: 'Use 5W-30 synthetic',
-        assignee: 'Mike Torres',
-      },
-      {
-        id: 'R002',
-        vehicles: ['VAN-012'],
-        vehicle: 'VAN-012',
-        make: '2021 Mercedes Sprinter',
-        task: 'Air Filter',
-        type: 'Interval',
-        status: 'due-soon',
-        current: 44850,
-        target: 45000,
-        warn: 500,
-        priority: 'Medium',
-        notes: '',
-        assignee: '',
-      },
-      {
-        id: 'R003',
-        vehicles: ['FLT-088'],
-        vehicle: 'FLT-088',
-        make: '2023 Chevy Silverado',
-        task: 'Tire Rotation',
-        type: 'Odometer',
-        status: 'due-soon',
-        current: 22800,
-        target: 23000,
-        warn: 500,
-        priority: 'Low',
-        notes: '',
-        assignee: '',
-      },
-    ];
-
-    _workOrders = [
-      {
-        id: 'WO-2023',
-        vehicle: 'VAN-012',
-        make: '2021 Mercedes Sprinter',
-        task: 'Coolant Flush',
-        status: 'In Progress',
-        assignee: 'Shop A',
-        odo: '44,200',
-        cost: 280,
-        date: new Date().toISOString().split('T')[0],
-        notes: 'Flushing and replacing with OEM spec coolant',
-        parts: 'Coolant — $45',
-        labor: '$235',
-        reminderId: null,
-      },
-    ];
-
-    _woCounter = 2024;
-    _rCounter  = 4;
+    // No seed data — reminders and work orders are created by the user
+    // against real vehicles pulled from the Geotab session database.
+    _reminders  = [];
+    _workOrders = [];
+    _woCounter  = 2000;
+    _rCounter   = 1;
   };
 
   // ── Reminders ───────────────────────────────────────────────────────────────
