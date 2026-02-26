@@ -17,17 +17,9 @@ const app = (() => {
   // Multi-vehicle picker state (used while reminder modal is open)
   let _pickerSelected = [];
 
-  // Vehicle list — populated by Geotab API when running inside MyGeotab,
-  // falls back to demo vehicles when running standalone.
-  let KNOWN_VEHICLES = [
-    { id: 'TRK-041', make: '2022 Ford F-250' },
-    { id: 'VAN-012', make: '2021 Mercedes Sprinter' },
-    { id: 'FLT-088', make: '2023 Chevy Silverado' },
-    { id: 'TRK-022', make: '2020 Ram 2500' },
-    { id: 'SED-055', make: '2022 Ford Explorer' },
-    { id: 'TRK-099', make: '2023 Ram 1500' },
-    { id: 'VAN-031', make: '2021 Ford Transit' },
-  ];
+  // Vehicle list — populated by geotab.js via setVehicles() once the
+  // Geotab API loads all Devices from the current session database.
+  let KNOWN_VEHICLES = [];
 
   // Called by geotab.js once real vehicles are loaded from the API
   const setVehicles = (vehicles) => {
