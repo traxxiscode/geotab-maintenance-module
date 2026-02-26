@@ -1,14 +1,6 @@
 /**
  * geotab.js
  * Geotab MyGeotab API integration layer + add-in lifecycle entry point.
- *
- * - Uses the official geotab.addin namespace and initialize/focus/blur lifecycle
- * - Resolves the Geotab session to get the database name
- * - Passes the database name to DataStore.connect() so Firestore loads the right data
- * - Loads all real vehicles (Devices) from your database
- * - Polls live odometer (StatusData) every 30 seconds
- * - Detects triggered reminders and surfaces notifications
- * - Falls back gracefully when running outside MyGeotab
  */
 
 // ── Geotab Add-in Namespace ──────────────────────────────────────────────────
@@ -16,34 +8,25 @@
 geotab.addin.fleetMaintenance = function () {
   'use strict';
 
-  let _api   = null;
-  let _state = null;
+  let _api     = null;
+  let _state   = null;
   let _elAddin = null;
-
-  // ── Return the add-in lifecycle object ──────────────────────────────────────
 
   return {
 
     initialize: function (freshApi, freshState, initializeCallback) {
-      _api   = freshApi;
-      _state = freshState;
+      _api     = freshApi;
+      _state   = freshState;
       _elAddin = document.getElementById('fleetMaintenance');
-
       if (_state.translate) _state.translate(_elAddin || '');
-
       initializeCallback();
     },
 
     focus: function (freshApi, freshState) {
       _api   = freshApi;
       _state = freshState;
-
       if (_elAddin) _elAddin.style.display = 'block';
-
-      // Initialize the UI shell first (renders with empty/default data)
       if (window.app) window.app.init();
-
-      // Then resolve the Geotab session → connect Firestore → load real data
       GeotabIntegration.init(_api);
     },
 
@@ -59,12 +42,13 @@ geotab.addin.fleetMaintenance = function () {
 
 const GeotabIntegration = (() => {
 
-  const ODOMETER_DIAGNOSTIC_ID = 'DiagnosticOdometerAdjustmentId';
-  const POLL_INTERVAL_MS = 30_000;
+  const DIAG_ODOMETER     = 'DiagnosticOdometerAdjustmentId';
+  const DIAG_ENGINE_HOURS = 'DiagnosticEngineHoursAdjustmentId';
+  const POLL_INTERVAL_MS  = 30_000;
 
-  let _api        = null;
-  let _pollTimer  = null;
-  let _vehicles   = []; // { id, geotabId, name, licensePlate, make, year }
+  let _api       = null;
+  let _pollTimer = null;
+  let _vehicles  = [];
 
   // ── Public ──────────────────────────────────────────────────────────────────
 
@@ -73,47 +57,38 @@ const GeotabIntegration = (() => {
 
     if (!_api) {
       console.warn('GeotabIntegration: No API — running in demo mode.');
-      // Connect DataStore without a real database name — uses defaults
       await DataStore.connect(null);
       _startDemoMode();
       return;
     }
 
-    // Resolve session to get the database name, then boot everything
     _api.getSession(async function (session) {
       const databaseName = session.database;
 
-      // Update the database label if present in the HTML
       const dbEl = document.getElementById('currentDatabase');
       if (dbEl) dbEl.textContent = databaseName;
 
-      // Connect DataStore to Firestore for this database
-      // (DataStore.connect handles auth, doc creation, and loading data)
       await DataStore.connect(databaseName);
 
-      // Now load vehicles from Geotab and start polling
       try {
         await _loadVehicles();
         await _pollOdometers();
         _pollTimer = setInterval(_pollOdometers, POLL_INTERVAL_MS);
         _setSyncStatus(true);
       } catch (err) {
-        console.error('GeotabIntegration: Failed to load vehicles / poll odometers.', err);
+        console.error('GeotabIntegration: init failed.', err);
         _setSyncStatus(false);
       }
     });
   };
 
   const destroy = () => {
-    if (_pollTimer) {
-      clearInterval(_pollTimer);
-      _pollTimer = null;
-    }
+    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
   };
 
   const getVehicles = () => _vehicles;
 
-  // ── Load Vehicles ────────────────────────────────────────────────────────────
+  // ── Load Vehicles ─────────────────────────────────────────────────────────
 
   const _loadVehicles = async () => {
     const devices = await _api.call('Get', {
@@ -134,12 +109,10 @@ const GeotabIntegration = (() => {
 
     _vehicles.sort((a, b) => a.name.localeCompare(b.name));
 
-    // Push real vehicles into the app vehicle picker
     if (window.app && typeof window.app.setVehicles === 'function') {
       window.app.setVehicles(_vehicles);
     }
 
-    // Populate the vehicle filter dropdown in the reminders table
     const select = document.getElementById('vehicleFilter');
     if (select) {
       while (select.options.length > 1) select.remove(1);
@@ -154,7 +127,60 @@ const GeotabIntegration = (() => {
     console.log(`GeotabIntegration: Loaded ${_vehicles.length} vehicles.`);
   };
 
-  // ── Odometer Polling ─────────────────────────────────────────────────────────
+  // ── Asset Data for Reminder Modal ─────────────────────────────────────────
+  // Returns last odometer (mi), engine hours, and last maintenance date per vehicle.
+
+  const getVehicleAssetData = async () => {
+    if (!_api || !_vehicles.length) {
+      return _vehicles.map(v => ({
+        ...v, lastOdometer: null, lastEngineHours: null, lastMaintenanceDate: null,
+      }));
+    }
+
+    const fromDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+    const results = await Promise.all(_vehicles.map(async (vehicle) => {
+      try {
+        const [odomData, hoursData] = await Promise.all([
+          _api.call('Get', {
+            typeName: 'StatusData',
+            search: {
+              deviceSearch:     { id: vehicle.geotabId },
+              diagnosticSearch: { id: DIAG_ODOMETER },
+              fromDate,
+            },
+            resultsLimit: 1,
+          }),
+          _api.call('Get', {
+            typeName: 'StatusData',
+            search: {
+              deviceSearch:     { id: vehicle.geotabId },
+              diagnosticSearch: { id: DIAG_ENGINE_HOURS },
+              fromDate,
+            },
+            resultsLimit: 1,
+          }),
+        ]);
+
+        const completedWOs = DataStore.getWorkOrders()
+          .filter(w => w.vehicle === vehicle.name && w.status === 'Completed')
+          .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        return {
+          ...vehicle,
+          lastOdometer:        odomData.length  ? Math.round(odomData[0].data  * 0.000621371) : null,
+          lastEngineHours:     hoursData.length ? Math.round(hoursData[0].data / 3600)         : null,
+          lastMaintenanceDate: completedWOs.length ? completedWOs[0].date : null,
+        };
+      } catch {
+        return { ...vehicle, lastOdometer: null, lastEngineHours: null, lastMaintenanceDate: null };
+      }
+    }));
+
+    return results;
+  };
+
+  // ── Odometer Polling ──────────────────────────────────────────────────────
 
   const _pollOdometers = async () => {
     if (!_api || !_vehicles.length) return;
@@ -163,24 +189,20 @@ const GeotabIntegration = (() => {
       const trackedNames   = DataStore.getUniqueVehicles();
       const trackedDevices = _vehicles.filter(v => trackedNames.includes(v.name));
 
-      if (!trackedDevices.length) {
-        _updateSyncLabel();
-        return;
-      }
+      if (!trackedDevices.length) { _updateSyncLabel(); return; }
 
       const promises = trackedDevices.map(device =>
         _api.call('Get', {
           typeName: 'StatusData',
           search: {
             deviceSearch:     { id: device.geotabId },
-            diagnosticSearch: { id: ODOMETER_DIAGNOSTIC_ID },
+            diagnosticSearch: { id: DIAG_ODOMETER },
             fromDate: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
           },
           resultsLimit: 1,
-        }).then(results => ({
+        }).then(res => ({
           vehicleName: device.name,
-          // Geotab returns metres — convert to miles
-          odometer: results.length ? Math.round(results[0].data * 0.000621371) : null,
+          odometer: res.length ? Math.round(res[0].data * 0.000621371) : null,
         })).catch(() => ({ vehicleName: device.name, odometer: null }))
       );
 
@@ -188,9 +210,8 @@ const GeotabIntegration = (() => {
 
       let anyChanged = false;
       readings.forEach(({ vehicleName, odometer }) => {
-        if (odometer !== null) {
-          const changed = DataStore.updateOdometer(vehicleName, odometer);
-          if (changed) anyChanged = true;
+        if (odometer !== null && DataStore.updateOdometer(vehicleName, odometer)) {
+          anyChanged = true;
         }
       });
 
@@ -205,7 +226,7 @@ const GeotabIntegration = (() => {
     }
   };
 
-  // ── Triggered Reminder Notifications ────────────────────────────────────────
+  // ── Triggered Reminder Notifications ─────────────────────────────────────
 
   const _checkForTriggeredReminders = () => {
     const triggered = DataStore.getReminders()
@@ -222,7 +243,7 @@ const GeotabIntegration = (() => {
     }
   };
 
-  // ── Status Helpers ───────────────────────────────────────────────────────────
+  // ── Status Helpers ────────────────────────────────────────────────────────
 
   const _setSyncStatus = (connected) => {
     const el   = document.getElementById('syncLabel');
@@ -249,7 +270,7 @@ const GeotabIntegration = (() => {
     }, 5000);
   };
 
-  // ── Demo Mode ────────────────────────────────────────────────────────────────
+  // ── Demo Mode ─────────────────────────────────────────────────────────────
 
   const _startDemoMode = () => {
     const el = document.getElementById('syncLabel');
@@ -270,13 +291,11 @@ const GeotabIntegration = (() => {
     if (dot) dot.style.display = 'block';
   };
 
-  return { init, destroy, getVehicles };
+  return { init, destroy, getVehicles, getVehicleAssetData };
 
 })();
 
 // ── Standalone / GitHub Pages Fallback ───────────────────────────────────────
-// When opened directly in a browser (not inside MyGeotab), geotab is undefined.
-// We detect this and boot in demo mode using DOMContentLoaded.
 
 if (typeof geotab === 'undefined') {
   document.addEventListener('DOMContentLoaded', () => {
