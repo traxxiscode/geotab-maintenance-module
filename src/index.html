@@ -239,6 +239,24 @@
     </div>
   </div>
 
+  <!-- ── Firebase ── -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey:            "AIzaSyD1kgLS7675ChN142GaDryLGCwGSRFnS4g",
+      authDomain:        "maintenance-module.firebaseapp.com",
+      projectId:         "maintenance-module",
+      storageBucket:     "maintenance-module.firebasestorage.app",
+      messagingSenderId: "947969375990",
+      appId:             "1:947969375990:web:ee539e014b1fe678d1f6d7"
+    };
+    firebase.initializeApp(firebaseConfig);
+    window.db = firebase.firestore();
+  </script>
+
+  <!-- ── Add-in Scripts ── -->
   <script src="data.js"></script>
   <script src="geotab.js"></script>
   <script src="app.js"></script>
